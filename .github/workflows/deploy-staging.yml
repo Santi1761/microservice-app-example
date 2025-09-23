@@ -15,11 +15,22 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: staging   
+    environment: staging   # usa los Environment secrets de “staging”
     steps:
       - uses: actions/checkout@v4
 
-      - name: Desplegar a STAGING vía SSH (sin Ansible)
+      # 1) Prueba de conectividad SSH 
+      - name: Test SSH connectivity
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "✅ SSH OK en $(hostname)"; uname -a
+
+      # 2) Asegura carpeta destino en la VM
+      - name: Ensure remote dir
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -30,20 +41,41 @@ jobs:
             APP_DIR=/opt/microservice-app-stg
             sudo mkdir -p $APP_DIR
             sudo chown $USER:$USER $APP_DIR
+            echo "APP_DIR=$APP_DIR" > /tmp/appdir.txt
 
-            # Subimos .env, compose de staging y nginx.conf desde el repo actual
-            cat > $APP_DIR/.env <<'EOF'
-            $(cat ops/compose/.env)
-            EOF
+      # 3) Copia archivos 
+      - name: Copy compose files to remote
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "ops/compose/.env,ops/compose/docker-compose.stg.yml,ops/compose/nginx.conf"
+          target: "/opt/microservice-app-stg"
+          strip_components: 2
+          overwrite: true
 
-            cat > $APP_DIR/docker-compose.yml <<'EOF'
-            $(cat ops/compose/docker-compose.stg.yml)
-            EOF
-
-            cat > $APP_DIR/nginx.conf <<'EOF'
-            $(cat ops/compose/nginx.conf)
-            EOF
-
+      # 4) Levanta con docker compose (pull + up -d)
+      - name: Pull & Up (staging)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            APP_DIR=/opt/microservice-app-stg
             cd $APP_DIR
-            docker compose pull
-            docker compose up -d --remove-orphans
+
+            # Opcional: verifica docker y compose
+            docker --version || (echo "Docker no está instalado"; exit 1)
+            docker compose version || (echo "Compose plugin no está instalado"; exit 1)
+
+            # Renombra el compose de staging a docker-compose.yml
+            mv -f docker-compose.stg.yml docker-compose.yml
+
+            # Pull y up
+            sudo docker compose pull
+            sudo docker compose up -d --remove-orphans
+
+            sudo docker compose ps
