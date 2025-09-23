@@ -1,9 +1,10 @@
 name: build-users-api
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, 'feature/**', 'release/**' ]
     paths: [ 'users-api/**', '.github/workflows/build-users-api.yml' ]
   pull_request:
+    branches: [ develop ]
     paths: [ 'users-api/**' ]
 
 jobs:
@@ -16,8 +17,11 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - name: Build & Push
+        uses: docker/build-push-action@v6
         with:
           context: ./users-api
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/users-api:latest
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/users-api:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/users-api:${{ github.sha }}

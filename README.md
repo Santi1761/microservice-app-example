@@ -1,17 +1,31 @@
-# Microservice App - PRFT Devops Training
+David Santiago Donneys
+Santiago Arboleda Velasco
 
-This is the application you are going to use through the whole traninig. This, hopefully, will teach you the fundamentals you need in a real project. You will find a basic TODO application designed with a [microservice architecture](https://microservices.io). Although is a TODO application, it is interesting because the microservices that compose it are written in different programming language or frameworks (Go, Python, Vue, Java, and NodeJS). With this design you will experiment with multiple build tools and environments. 
+# Taller 1 – Automatización de Infraestructura con Pipelines
 
-## Components
-In each folder you can find a more in-depth explanation of each component:
+Repositorio: `microservice-app-example` (fork).  
+Objetivo: Construir **pipelines de infraestructura y de código** que permitan a un equipo ágil desarrollar, integrar y desplegar los 5 servicios del proyecto.
 
-1. [Users API](/users-api) is a Spring Boot application. Provides user profiles. At the moment, does not provide full CRUD, just getting a single user and all users.
-2. [Auth API](/auth-api) is a Go application, and provides authorization functionality. Generates [JWT](https://jwt.io/) tokens to be used with other APIs.
-3. [TODOs API](/todos-api) is a NodeJS application, provides CRUD functionality over user's TODO records. Also, it logs "create" and "delete" operations to [Redis](https://redis.io/) queue.
-4. [Log Message Processor](/log-message-processor) is a queue processor written in Python. Its purpose is to read messages from a Redis queue and print them to standard output.
-5. [Frontend](/frontend) Vue application, provides UI.
+## Qué contiene este repositorio
+- **Aplicaciones**: `auth-api` (Go), `users-api` (Spring Boot), `todos-api` (Node), `log-message-processor` (Python), `frontend` (Vue).
+- **Infraestructura**: `vm/` (Terraform) para Azure VM y red; `ops/compose/` con `docker-compose` para staging/prod; `ops/ansible/` para despliegue automatizado en la VM.
+- **CI/CD**: Workflows en `.github/workflows/` para build por servicio, deploy a *staging* y *producción*, y plan/apply de Terraform.
+- **Documentación** Metodología, branching, pipelines, arquitectura y guion de demo.
 
-## Architecture
+## Navegación rápida
+- Metodología: [/docs/methodology.md](./methodology.md)
+- Branching Dev: [/docs/branching-dev.md](./docs/strategyDev.md)
+- Branching Ops/Infra: [/docs/branching-ops.md](./docs/strategyOps.md)
+- Pipelines (build/test/push): [/docs/pipelines/dev-workflows.md](./pipelines/dev-workflows.md)
+- Pipelines (deploy): [/docs/pipelines/deploy-workflows.md](./pipelines/deploy-workflows.md)
+- Pipelines (infra): [/docs/pipelines/infra-workflows.md](./pipelines/infra-workflows.md)
+- Arquitectura (diagrama y decisiones): [/docs/architecture/arquitectura.md](./architecture/arquitectura.md)
+- Guion de demo: [/docs/demo/pasos-demo.md](./demo/pasos-demo.md)
 
-Take a look at the components diagram that describes them and their interactions.
-![microservice-app-example](/arch-img/Microservices.png)
+## Entregables principales (según rúbrica)
+1. Estrategia de branching (dev y ops).
+2. ≥ 2 patrones de diseño de nube (documentados en arquitectura).
+3. Diagrama de arquitectura actualizado al repo.
+4. Pipelines de desarrollo y de infraestructura.
+5. Implementación en Azure VM y evidencia de despliegue.
+6. Presentación/demostración: cambio en `develop` → staging; release → `main` → producción. 

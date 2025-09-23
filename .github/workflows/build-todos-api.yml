@@ -1,9 +1,10 @@
 name: build-todos-api
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, 'feature/**', 'release/**' ]
     paths: [ 'todos-api/**', '.github/workflows/build-todos-api.yml' ]
   pull_request:
+    branches: [ develop ]
     paths: [ 'todos-api/**' ]
 
 jobs:
@@ -16,8 +17,11 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - name: Build & Push
+        uses: docker/build-push-action@v6
         with:
           context: ./todos-api
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/todos-api:latest
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/todos-api:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/todos-api:${{ github.sha }}

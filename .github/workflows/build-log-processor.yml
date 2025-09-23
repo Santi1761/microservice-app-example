@@ -1,9 +1,10 @@
 name: build-log-processor
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, 'feature/**', 'release/**' ]
     paths: [ 'log-message-processor/**', '.github/workflows/build-log-processor.yml' ]
   pull_request:
+    branches: [ develop ]
     paths: [ 'log-message-processor/**' ]
 
 jobs:
@@ -16,8 +17,11 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - name: Build & Push
+        uses: docker/build-push-action@v6
         with:
           context: ./log-message-processor
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/log-message-processor:latest
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/log-message-processor:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/log-message-processor:${{ github.sha }}

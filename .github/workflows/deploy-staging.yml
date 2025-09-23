@@ -1,0 +1,49 @@
+name: deploy-staging
+on:
+  push:
+    branches: [ develop, 'release/**' ]
+    paths:
+      - 'ops/**'
+      - '.github/workflows/deploy-staging.yml'
+      - 'frontend/**'
+      - 'users-api/**'
+      - 'auth-api/**'
+      - 'todos-api/**'
+      - 'log-message-processor/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging   
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Desplegar a STAGING vía SSH (sin Ansible)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            APP_DIR=/opt/microservice-app-stg
+            sudo mkdir -p $APP_DIR
+            sudo chown $USER:$USER $APP_DIR
+
+            # Subimos .env, compose de staging y nginx.conf desde el repo actual
+            cat > $APP_DIR/.env <<'EOF'
+            $(cat ops/compose/.env)
+            EOF
+
+            cat > $APP_DIR/docker-compose.yml <<'EOF'
+            $(cat ops/compose/docker-compose.stg.yml)
+            EOF
+
+            cat > $APP_DIR/nginx.conf <<'EOF'
+            $(cat ops/compose/nginx.conf)
+            EOF
+
+            cd $APP_DIR
+            docker compose pull
+            docker compose up -d --remove-orphans
