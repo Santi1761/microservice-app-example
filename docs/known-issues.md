@@ -1,0 +1,7 @@
+- Spring Boot 1.5 requiere **Java 8** (no Java 17).
+- `redis==2.10.6` necesita `distutils` → usar **Python 3.11** (no 3.12).
+- En docker-compose, la clave `version:` es obsoleta (quitarla).
+- 502 en Nginx si puertos esperados ≠ puertos reales:
+  - todos-api → 8082
+  - users-api → 8083
+  - auth-api → 8081
