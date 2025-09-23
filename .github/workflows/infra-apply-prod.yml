@@ -1,0 +1,16 @@
+name: infra-apply-prod
+on:
+  push:
+    branches: [ "infra/main" ]
+    paths: [ "vm/**" ]
+  workflow_dispatch:
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform apply -auto-approve -var-file="envs/dev/terraform.tfvars"

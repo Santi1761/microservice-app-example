@@ -1,0 +1,22 @@
+name: infra-plan
+on:
+  pull_request:
+    branches: [ "infra/develop", "infra/staging", "infra/main" ]
+    paths: [ "vm/**" ]
+  push:
+    branches: [ "infra/develop" ]
+    paths: [ "vm/**" ]
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform fmt -check
+      - run: terraform validate
+      - run: terraform plan -var-file="envs/dev/terraform.tfvars"
