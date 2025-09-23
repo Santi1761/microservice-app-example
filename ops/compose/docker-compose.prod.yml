@@ -1,19 +1,10 @@
-version: "3.9"
 name: microservice-app
-
-sservices:
-  frontend:
-    image: ${DOCKERHUB_USER}/frontend:${TAG}
-    ports: ["80:80"]
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
     volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on: [ users-api, todos-api, auth-api ]
-
-  todos-api:
-    image: ${DOCKERHUB_USER}/todos-api:${TAG}
-    ports: ["3000:3000"]
-    env_file: ./.env
-    depends_on: [ redis, users-api ]
+      - redis-data:/data
 
   users-api:
     image: ${DOCKERHUB_USER}/users-api:${TAG}
@@ -25,11 +16,24 @@ sservices:
     ports: ["8081:8081"]
     env_file: ./.env
 
+  todos-api:
+    image: ${DOCKERHUB_USER}/todos-api:${TAG}
+    ports: ["3000:3000"]
+    env_file: ./.env
+    depends_on: [ redis, users-api ]
+
   log-processor:
     image: ${DOCKERHUB_USER}/log-message-processor:${TAG}
     env_file: ./.env
     depends_on: [ redis ]
 
-  redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
+  frontend:
+    image: ${DOCKERHUB_USER}/frontend:${TAG}
+    ports: ["80:80"]
+    env_file: ./.env
+    depends_on: [ users-api, todos-api, auth-api ]
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  redis-data:
