@@ -1,0 +1,48 @@
+name: microservice-app-stg
+services:
+  nginx:
+    image: nginx:alpine
+    ports: ["80:80"]
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on: [frontend]
+
+  frontend:
+    image: ${DOCKERHUB_USER}/frontend:${TAG}
+    env_file: ./.env
+    depends_on: [todos-api]
+
+  auth-api:
+    image: ${DOCKERHUB_USER}/auth-api:${TAG}
+    env_file: ./.env
+    ports: ["8081:8081"]
+
+  users-api:
+    image: ${DOCKERHUB_USER}/users-api:${TAG}
+    env_file: ./.env
+    ports: ["8080:8080"]
+
+  todos-api:
+    image: ${DOCKERHUB_USER}/todos-api:${TAG}
+    env_file: ./.env
+    environment:
+      - USERS_API_URL=http://users-api:8080
+      - REDIS_URL=redis://redis:6379
+      - PORT=3000
+    ports: ["3000:3000"]
+    depends_on: [redis, users-api]
+
+  log-message-processor:
+    image: ${DOCKERHUB_USER}/log-message-processor:${TAG}
+    env_file: ./.env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on: [redis]
+
+  redis:
+    image: redis:7-alpine
+    volumes: [ "redis-data:/data" ]
+
+volumes:
+  redis-data:
