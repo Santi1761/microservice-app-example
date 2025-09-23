@@ -10,8 +10,6 @@ services:
     image: ${DOCKERHUB_USER}/users-api:${TAG}
     ports: ["8080:8080"]
     env_file: ./.env
-    environment:
-      - SERVER_PORT=8080      
 
   auth-api:
     image: ${DOCKERHUB_USER}/auth-api:${TAG}
@@ -23,14 +21,16 @@ services:
     ports: ["3000:3000"]
     env_file: ./.env
     environment:
-      - PORT=3000            # Node estaba en 8082; lo forzamos a 3000 para que Nginx pegue bien
+      - USERS_API_URL=http://users-api:8080    # <-- URL interna
+      - REDIS_URL=redis://redis:6379           # <-- URL interna
+      - PORT=3000
     depends_on: [ redis, users-api ]
 
   log-processor:
     image: ${DOCKERHUB_USER}/log-message-processor:${TAG}
     env_file: ./.env
     environment:
-      - REDIS_HOST=redis     # faltaban y por eso crasheó
+      - REDIS_HOST=redis
       - REDIS_PORT=6379
     depends_on: [ redis ]
 

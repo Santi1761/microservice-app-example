@@ -1,9 +1,10 @@
 name: build-frontend
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, 'feature/**', 'release/**' ]
     paths: [ 'frontend/**', '.github/workflows/build-frontend.yml' ]
   pull_request:
+    branches: [ develop ]
     paths: [ 'frontend/**' ]
 
 jobs:
@@ -16,8 +17,11 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - name: Build & Push
+        uses: docker/build-push-action@v6
         with:
           context: ./frontend
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/frontend:latest
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/frontend:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/frontend:${{ github.sha }}
