@@ -49,9 +49,9 @@ jobs:
       - name: Despliegue con Ansible (staging)
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
+          ANSIBLE_STDOUT_CALLBACK: "yaml"
         run: |
-          ansible-playbook -i ops/ansible/inventory/hosts.ini \
-            ops/ansible/playbooks/deploy.yml -l staging
+          ansible-playbook -vv -i ops/ansible/inventory/hosts.ini ops/ansible/playbooks/deploy.yml -l staging
 
       - name: Smoke test (staging)
         uses: appleboy/ssh-action@v1.0.3

@@ -2,22 +2,33 @@
 - name: Despliegue microservice-app (staging/prod auto)
   hosts: all
   become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive  # evita prompts de apt
 
   vars:
-    # Directorio remoto donde quedará la app
     app_dir: "{{ '/opt/microservice-app-stg' if 'staging' in group_names else '/opt/microservice-app' }}"
     # Compose que se copia según el grupo del host
     compose_file: "{{ 'docker-compose.stg.yml' if 'staging' in group_names else 'docker-compose.prod.yml' }}"
-    # Carpeta local desde donde copiamos los archivos
+    # Carpeta local (en el repo) desde donde copiamos los archivos
     compose_src_dir: "{{ playbook_dir }}/../../compose"
 
   tasks:
-    # ---------- Prerrequisitos de Docker ----------
+    # ---------- Esperar locks de apt/dpkg  ----------
+    - name: Esperar locks de APT/dpkg si están en uso
+      ansible.builtin.shell: |
+        set -e
+        while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 3; done
+        while fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 3; done
+      changed_when: false
+
+    # ---------- Prerrequisitos de Docker (idempotente) ----------
     - name: Paquetes base
       ansible.builtin.apt:
         name: [ 'ca-certificates', 'curl', 'gnupg', 'python3' ]
         state: present
         update_cache: yes
+        cache_valid_time: 3600
+        force_apt_get: yes
 
     - name: Crear carpeta de keyrings
       ansible.builtin.file:
@@ -51,6 +62,7 @@
     - name: Actualizar cache APT
       ansible.builtin.apt:
         update_cache: yes
+        force_apt_get: yes
 
     - name: Instalar Docker Engine, Buildx y Compose
       ansible.builtin.apt:
@@ -61,6 +73,7 @@
           - docker-buildx-plugin
           - docker-compose-plugin
         state: present
+        force_apt_get: yes
 
     - name: Agregar usuario ubuntu al grupo docker
       ansible.builtin.user:
@@ -106,7 +119,7 @@
         state: present
         remove_orphans: true
 
-    - name: Smoke GET / (HTTP 200)
+    - name: Smoke GET /
       ansible.builtin.uri:
         url: "http://localhost/"
         return_content: no
