@@ -12,14 +12,12 @@ services:
   frontend:
     image: ${DOCKERHUB_USER}/frontend:${TAG}
     env_file: ./.env
-    depends_on: [ todos-api ]
-    restart: unless-stopped
+    depends_on: [todos-api]
 
   users-api:
     image: ${DOCKERHUB_USER}/users-api:${TAG}
     env_file: ./.env
-    ports: ["8083:8083"]        # expuesto en host para diagnóstico
-    restart: unless-stopped
+    ports: ["8083:8083"]   
 
   todos-api:
     image: ${DOCKERHUB_USER}/todos-api:${TAG}
@@ -28,13 +26,13 @@ services:
       - USERS_API_URL=http://users-api:8083
       - REDIS_URL=redis://redis:6379
       - PORT=8082
-    ports: ["8082:8082"]        
-    depends_on: [ redis, users-api ]
-    restart: unless-stopped
+    ports: ["8082:8082"]
+    depends_on: [redis, users-api]
 
   auth-api:
     image: ${DOCKERHUB_USER}/auth-api:${TAG}
     env_file: ./.env
+ 
     environment:
       - JWT_SECRET=${JWT_SECRET}
       - USERS_API_URL=http://users-api:8083
@@ -42,8 +40,6 @@ services:
       - USERS_URL=http://users-api:8083
       - USER_SERVICE_URL=http://users-api:8083
       - USER_API_URL=http://users-api:8083
-    depends_on: [ users-api ]
-    restart: unless-stopped
 
   log-message-processor:
     image: ${DOCKERHUB_USER}/log-message-processor:${TAG}
