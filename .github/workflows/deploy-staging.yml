@@ -77,11 +77,9 @@ jobs:
             # Renombra el compose de staging a docker-compose.yml
             mv -f docker-compose.stg.yml docker-compose.yml
 
-            # Verificaciones mínimas
             docker --version
             docker compose version
 
-            # Pull y Up
             sudo docker compose pull
             sudo docker compose up -d --remove-orphans
 
@@ -115,8 +113,8 @@ jobs:
             sudo sed -i -E "s#__AUTH_PORT__#${APORT}#g" nginx.conf
             sudo docker compose up -d --force-recreate nginx
 
-      # 6) Smoke tests básicos
-      - name: Smoke tests
+      # 6) Smoke tests con JWT (users-api devuelve 500 sin Authorization)
+      - name: Smoke tests (JWT)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -132,13 +130,31 @@ jobs:
             echo "/ -> $CODE_ROOT"
             [ "$CODE_ROOT" = "200" ] || (echo "Root no responde 200"; exit 1)
 
-            # /api/users/ y /api/todos/ deberían responder 401 sin token (o 200 si están abiertos)
-            CODE_USERS=$(curl -sS -o /dev/null -w "%{http_code}" http://localhost/api/users/)
-            CODE_TODOS=$(curl -sS -o /dev/null -w "%{http_code}" http://localhost/api/todos/)
+            # Genera JWT HS256 con el mismo secreto del .env
+            JWT_SECRET=$(grep -E '^JWT_SECRET=' .env | cut -d= -f2-)
+            if [ -z "$JWT_SECRET" ]; then echo "Falta JWT_SECRET en .env"; exit 1; fi
+
+            TOKEN=$(SECRET="$JWT_SECRET" python3 - <<'PY'
+            import os,json,base64,hmac,hashlib,time
+            def b64url(b): return base64.urlsafe_b64encode(b).rstrip(b'=')
+            h={"alg":"HS256","typ":"JWT"}
+            now=int(time.time())
+            p={"sub":"demo","name":"Demo User","iat":now,"nbf":now-5,"exp":now+3600,"roles":["USER"]}
+            sec=os.environ.get("SECRET","change_this_secret").encode()
+            seg=[b64url(json.dumps(h,separators=(',',':')).encode()), b64url(json.dumps(p,separators=(',',':')).encode())]
+            sig=b64url(hmac.new(sec,b'.'.join(seg),hashlib.sha256).digest())
+            print((b'.'.join(seg)+b'.'+sig).decode())
+            PY
+            )
+            echo "JWT prefix: ${TOKEN:0:20}..."
+
+            # /api/users/ y /api/todos/ con Authorization deben dar 200
+            CODE_USERS=$(curl -sS -H "Authorization: Bearer $TOKEN" -o /dev/null -w "%{http_code}" http://localhost/api/users/)
+            CODE_TODOS=$(curl -sS -H "Authorization: Bearer $TOKEN" -o /dev/null -w "%{http_code}" http://localhost/api/todos/)
             echo "/api/users/ -> $CODE_USERS"
             echo "/api/todos/ -> $CODE_TODOS"
 
-            case "$CODE_USERS" in 200|401) : ;; *) echo "users-api no OK ($CODE_USERS)"; exit 1;; esac
-            case "$CODE_TODOS" in 200|401) : ;; *) echo "todos-api no OK ($CODE_TODOS)"; exit 1;; esac
+            [ "$CODE_USERS" = "200" ] || (echo "users-api no OK ($CODE_USERS)"; exit 1)
+            [ "$CODE_TODOS" = "200" ] || (echo "todos-api no OK ($CODE_TODOS)"; exit 1)
 
-            echo "✅ Smoke OK"
+            echo " Smoke OK con JWT"
