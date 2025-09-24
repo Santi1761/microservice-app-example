@@ -44,13 +44,22 @@ jobs:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Preflight TCP 22 (staging)
+        shell: bash
         run: |
+          set -e
           echo "Probe puerto 22..."
-          timeout 8 bash -lc 'cat < /dev/null > /dev/tcp/${{ secrets.SSH_HOST }}/22' && echo "OK puerto 22" || (echo "Fallo puerto 22"; exit 1)
+          timeout 8 bash -lc 'echo > /dev/tcp/${{ secrets.SSH_HOST }}/22' \
+            && echo "OK puerto 22" || (echo "Fallo puerto 22"; exit 1)
 
       - name: Comprobar conectividad
+        shell: bash
         run: |
-          ssh -vvv -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountM
+          ssh -vvv \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=10 \
+            -o ServerAliveInterval=5 \
+            -o ServerAliveCountMax=2 \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'echo ok'
 
       - name: Despliegue con Ansible (staging)
         env:
