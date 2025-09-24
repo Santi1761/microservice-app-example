@@ -1,46 +1,54 @@
 name: microservice-app
 services:
-  redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
+  nginx:
+    image: nginx:alpine
+    ports: ["80:80"]
     volumes:
-      - redis-data:/data
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on: [frontend]
+
+  frontend:
+    image: ${DOCKERHUB_USER}/frontend:${TAG}
+    env_file: ./.env
+    depends_on: [todos-api]
 
   users-api:
     image: ${DOCKERHUB_USER}/users-api:${TAG}
-    ports: ["8080:8080"]
     env_file: ./.env
-
-  auth-api:
-    image: ${DOCKERHUB_USER}/auth-api:${TAG}
-    ports: ["8081:8081"]
-    env_file: ./.env
+    ports: ["8083:8083"]    
 
   todos-api:
     image: ${DOCKERHUB_USER}/todos-api:${TAG}
-    ports: ["3000:3000"]
     env_file: ./.env
     environment:
-      - USERS_API_URL=http://users-api:8080    # <-- URL interna
-      - REDIS_URL=redis://redis:6379           # <-- URL interna
-      - PORT=3000
-    depends_on: [ redis, users-api ]
+      - USERS_API_URL=http://users-api:8083
+      - REDIS_URL=redis://redis:6379
+      - PORT=8082
+    ports: ["8082:8082"]   
+    depends_on: [redis, users-api]
 
-  log-processor:
+  auth-api:
+    image: ${DOCKERHUB_USER}/auth-api:${TAG}
+    env_file: ./.env
+    environment:
+      - JWT_SECRET=${JWT_SECRET}
+      - USERS_API_URL=http://users-api:8083
+      - USERS_SERVICE_URL=http://users-api:8083
+      - USERS_URL=http://users-api:8083
+      - USER_SERVICE_URL=http://users-api:8083
+      - USER_API_URL=http://users-api:8083
+
+  log-message-processor:
     image: ${DOCKERHUB_USER}/log-message-processor:${TAG}
     env_file: ./.env
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-    depends_on: [ redis ]
+    depends_on: [redis]
 
-  frontend:
-    image: ${DOCKERHUB_USER}/frontend:${TAG}
-    ports: ["80:80"]
-    env_file: ./.env
-    depends_on: [ users-api, todos-api, auth-api ]
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+  redis:
+    image: redis:7-alpine
+    volumes: [ "redis-data:/data" ]
 
 volumes:
   redis-data:
