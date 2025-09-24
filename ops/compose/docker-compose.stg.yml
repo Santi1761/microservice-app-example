@@ -1,21 +1,25 @@
 name: microservice-app-stg
+
 services:
   nginx:
     image: nginx:alpine
     ports: ["80:80"]
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on: [frontend]
+    depends_on: [ frontend ]
+    restart: unless-stopped
 
   frontend:
     image: ${DOCKERHUB_USER}/frontend:${TAG}
     env_file: ./.env
-    depends_on: [todos-api]
+    depends_on: [ todos-api ]
+    restart: unless-stopped
 
   users-api:
     image: ${DOCKERHUB_USER}/users-api:${TAG}
     env_file: ./.env
-    ports: ["8083:8083"]   
+    ports: ["8083:8083"]        # expuesto en host para diagnóstico
+    restart: unless-stopped
 
   todos-api:
     image: ${DOCKERHUB_USER}/todos-api:${TAG}
@@ -24,13 +28,13 @@ services:
       - USERS_API_URL=http://users-api:8083
       - REDIS_URL=redis://redis:6379
       - PORT=8082
-    ports: ["8082:8082"]
-    depends_on: [redis, users-api]
+    ports: ["8082:8082"]        
+    depends_on: [ redis, users-api ]
+    restart: unless-stopped
 
   auth-api:
     image: ${DOCKERHUB_USER}/auth-api:${TAG}
     env_file: ./.env
- 
     environment:
       - JWT_SECRET=${JWT_SECRET}
       - USERS_API_URL=http://users-api:8083
@@ -38,6 +42,8 @@ services:
       - USERS_URL=http://users-api:8083
       - USER_SERVICE_URL=http://users-api:8083
       - USER_API_URL=http://users-api:8083
+    depends_on: [ users-api ]
+    restart: unless-stopped
 
   log-message-processor:
     image: ${DOCKERHUB_USER}/log-message-processor:${TAG}
@@ -45,11 +51,13 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-    depends_on: [redis]
+    depends_on: [ redis ]
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     volumes: [ "redis-data:/data" ]
+    restart: unless-stopped
 
 volumes:
   redis-data:
