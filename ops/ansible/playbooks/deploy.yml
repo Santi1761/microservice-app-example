@@ -7,7 +7,7 @@
   tasks:
     - name: Paquetes base
       ansible.builtin.apt:
-        name: [ 'ca-certificates', 'curl', 'gnupg' ]
+        name: [ 'ca-certificates', 'curl', 'gnupg', 'python3' ]
         state: present
         update_cache: yes
 
@@ -30,12 +30,12 @@
       args:
         creates: /etc/apt/keyrings/docker.gpg
 
-    - name: Agregar repo de Docker (formato deb822)
+    - name: Agregar repo de Docker (deb822)
       ansible.builtin.deb822_repository:
         name: docker
         types: [deb]
         uris: https://download.docker.com/linux/ubuntu
-        suites: "{{ ansible_distribution_release }}"   # jammy en 22.04
+        suites: "{{ ansible_distribution_release }}"
         components: [stable]
         signed_by: /etc/apt/keyrings/docker.gpg
         state: present
@@ -72,18 +72,19 @@
         dest: "{{ compose_dir }}/.env"
         mode: '0644'
 
-    - name: Subir docker-compose
+    - name: Subir docker-compose.prod.yml como docker-compose.yml
       ansible.builtin.copy:
         src: "../../compose/docker-compose.prod.yml"
         dest: "{{ compose_dir }}/docker-compose.yml"
         mode: '0644'
 
-    - name: Subir nginx.conf
+    - name: Subir nginx.conf (con __AUTH_PORT__ placeholder)
       ansible.builtin.copy:
         src: "../../compose/nginx.conf"
         dest: "{{ compose_dir }}/nginx.conf"
         mode: '0644'
 
+    # Pull + Up
     - name: Pull de imágenes
       community.docker.docker_compose_v2:
         project_src: "{{ compose_dir }}"
@@ -94,3 +95,85 @@
       community.docker.docker_compose_v2:
         project_src: "{{ compose_dir }}"
         state: present
+
+    # --- Parche dinámico del puerto de auth-api ---
+    - name: Detectar puerto real de auth-api en logs
+      ansible.builtin.command:
+        cmd: docker compose logs --tail=200 auth-api
+        chdir: "{{ compose_dir }}"
+      register: auth_logs
+      changed_when: false
+
+    - name: Extraer puerto con regex
+      ansible.builtin.set_fact:
+        auth_port: "{{ (auth_logs.stdout | regex_findall('http server started on \\[::\\]:(\\d{4,5})'))[-1] | default('') }}"
+
+    - name: Fallar si no se detectó auth_port
+      ansible.builtin.fail:
+        msg: "No se pudo detectar puerto de auth-api"
+      when: auth_port == ""
+
+    - name: Reemplazar __AUTH_PORT__ en nginx.conf
+      ansible.builtin.replace:
+        path: "{{ compose_dir }}/nginx.conf"
+        regexp: "__AUTH_PORT__"
+        replace: "{{ auth_port }}"
+
+    - name: Recrear solo Nginx
+      community.docker.docker_compose_v2:
+        project_src: "{{ compose_dir }}"
+        services: [ "nginx" ]
+        state: restarted
+
+    # --- Smoke tests con JWT ---
+    - name: Leer JWT_SECRET
+      ansible.builtin.shell: |
+        set -e
+        grep -E '^JWT_SECRET=' .env | cut -d= -f2-
+      args:
+        chdir: "{{ compose_dir }}"
+      register: jwt_secret
+      changed_when: false
+
+    - name: Generar JWT HS256 con python3
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import json,base64,hmac,hashlib,time,os
+        def b64url(b): return base64.urlsafe_b64encode(b).rstrip(b'=')
+        h={"alg":"HS256","typ":"JWT"}; now=int(time.time())
+        p={"sub":"demo","name":"Demo User","iat":now,"nbf":now-5,"exp":now+3600,"roles":["USER"]}
+        sec=os.environ.get("SECRET","change_this_secret").encode()
+        seg=[b64url(json.dumps(h,separators=(',',':')).encode()),
+             b64url(json.dumps(p,separators=(',',':')).encode())]
+        sig=b64url(hmac.new(sec,b'.'.join(seg),hashlib.sha256).digest())
+        print((b'.'.join(seg)+b'.'+sig).decode())
+        PY
+      args:
+        chdir: "{{ compose_dir }}"
+        executable: /bin/bash
+      environment:
+        SECRET: "{{ jwt_secret.stdout | default('change_this_secret') }}"
+      register: jwt_token
+      changed_when: false
+
+    - name: Smoke GET /
+      ansible.builtin.uri:
+        url: "http://localhost/"
+        return_content: no
+        status_code: 200
+
+    - name: Smoke /api/users/ con JWT
+      ansible.builtin.uri:
+        url: "http://localhost/api/users/"
+        headers:
+          Authorization: "Bearer {{ jwt_token.stdout }}"
+        return_content: no
+        status_code: 200
+
+    - name: Smoke /api/todos/ con JWT
+      ansible.builtin.uri:
+        url: "http://localhost/api/todos/"
+        headers:
+          Authorization: "Bearer {{ jwt_token.stdout }}"
+        return_content: no
+        status_code: 200
