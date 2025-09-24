@@ -51,15 +51,18 @@ jobs:
           timeout 8 bash -lc 'echo > /dev/tcp/${{ secrets.SSH_HOST }}/22' \
             && echo "OK puerto 22" || (echo "Fallo puerto 22"; exit 1)
 
-      - name: Comprobar conectividad
-        shell: bash
-        run: |
-          ssh -vvv \
-            -o StrictHostKeyChecking=no \
-            -o ConnectTimeout=10 \
-            -o ServerAliveInterval=5 \
-            -o ServerAliveCountMax=2 \
-            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'echo ok'
+      - name: Comprobar conectividad (appleboy)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          timeout: 60s
+          command_timeout: 10s
+          script_stop: true
+          script: echo ok
+
 
       - name: Despliegue con Ansible (staging)
         env:
