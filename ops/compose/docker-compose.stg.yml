@@ -20,17 +20,16 @@ services:
   users-api:
     image: ${DOCKERHUB_USER}/users-api:${TAG}
     env_file: ./.env
-    ports: ["8080:8080"]
-
+    ports: ["8083:8083"]   
   todos-api:
     image: ${DOCKERHUB_USER}/todos-api:${TAG}
     env_file: ./.env
     environment:
-      - USERS_API_URL=http://users-api:8080
+      - USERS_API_URL=http://users-api:8083
       - REDIS_URL=redis://redis:6379
-      - PORT=3000
-    ports: ["3000:3000"]
-    depends_on: [redis, users-api]
+      - PORT=8082
+    ports: ["8082:8082"]     
+
 
   log-message-processor:
     image: ${DOCKERHUB_USER}/log-message-processor:${TAG}
