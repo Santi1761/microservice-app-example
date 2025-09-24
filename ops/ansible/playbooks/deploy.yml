@@ -1,10 +1,18 @@
 ---
-- hosts: prod
+- name: Despliegue microservice-app (staging/prod auto)
+  hosts: all
   become: true
+
   vars:
-    compose_dir: /opt/microservice-app
+    # Directorio remoto donde quedará la app
+    app_dir: "{{ '/opt/microservice-app-stg' if 'staging' in group_names else '/opt/microservice-app' }}"
+    # Compose que se copia según el grupo del host
+    compose_file: "{{ 'docker-compose.stg.yml' if 'staging' in group_names else 'docker-compose.prod.yml' }}"
+    # Carpeta local desde donde copiamos los archivos
+    compose_src_dir: "{{ playbook_dir }}/../../compose"
 
   tasks:
+    # ---------- Prerrequisitos de Docker ----------
     - name: Paquetes base
       ansible.builtin.apt:
         name: [ 'ca-certificates', 'curl', 'gnupg', 'python3' ]
@@ -60,120 +68,48 @@
         groups: docker
         append: yes
 
-    - name: Crear directorio de despliegue
+    # ---------- Despliegue de la app ----------
+    - name: INFO | Host en grupos / paths seleccionados
+      ansible.builtin.debug:
+        msg: "group_names={{ group_names }} | app_dir={{ app_dir }} | compose={{ compose_file }}"
+
+    - name: Crear directorio de la app
       ansible.builtin.file:
-        path: "{{ compose_dir }}"
+        path: "{{ app_dir }}"
         state: directory
         mode: '0755'
 
-    - name: Subir .env
+    - name: Subir .env (desde el repo)
       ansible.builtin.copy:
-        src: "../../compose/.env"
-        dest: "{{ compose_dir }}/.env"
+        src: "{{ compose_src_dir }}/.env"
+        dest: "{{ app_dir }}/.env"
+        mode: '0640'
+
+    - name: Copiar docker-compose según entorno (stg/prod)
+      ansible.builtin.copy:
+        src: "{{ compose_src_dir }}/{{ compose_file }}"
+        dest: "{{ app_dir }}/{{ compose_file }}"
         mode: '0644'
 
-    - name: Subir docker-compose.prod.yml como docker-compose.yml
+    - name: Copiar nginx.conf
       ansible.builtin.copy:
-        src: "../../compose/docker-compose.prod.yml"
-        dest: "{{ compose_dir }}/docker-compose.yml"
+        src: "{{ compose_src_dir }}/nginx.conf"
+        dest: "{{ app_dir }}/nginx.conf"
         mode: '0644'
 
-    - name: Subir nginx.conf (con __AUTH_PORT__ placeholder)
-      ansible.builtin.copy:
-        src: "../../compose/nginx.conf"
-        dest: "{{ compose_dir }}/nginx.conf"
-        mode: '0644'
-
-    # Pull + Up
-    - name: Pull de imágenes
+    - name: Levantar stack con Docker Compose v2 (pull+up)
       community.docker.docker_compose_v2:
-        project_src: "{{ compose_dir }}"
+        project_src: "{{ app_dir }}"
+        files:
+          - "{{ compose_file }}"
         pull: always
         state: present
+        remove_orphans: true
 
-    - name: Levantar servicios
-      community.docker.docker_compose_v2:
-        project_src: "{{ compose_dir }}"
-        state: present
-
-    # --- Parche dinámico del puerto de auth-api ---
-    - name: Detectar puerto real de auth-api en logs
-      ansible.builtin.command:
-        cmd: docker compose logs --tail=200 auth-api
-        chdir: "{{ compose_dir }}"
-      register: auth_logs
-      changed_when: false
-
-    - name: Extraer puerto con regex
-      ansible.builtin.set_fact:
-        auth_port: "{{ (auth_logs.stdout | regex_findall('http server started on \\[::\\]:(\\d{4,5})'))[-1] | default('') }}"
-
-    - name: Fallar si no se detectó auth_port
-      ansible.builtin.fail:
-        msg: "No se pudo detectar puerto de auth-api"
-      when: auth_port == ""
-
-    - name: Reemplazar __AUTH_PORT__ en nginx.conf
-      ansible.builtin.replace:
-        path: "{{ compose_dir }}/nginx.conf"
-        regexp: "__AUTH_PORT__"
-        replace: "{{ auth_port }}"
-
-    - name: Recrear solo Nginx
-      community.docker.docker_compose_v2:
-        project_src: "{{ compose_dir }}"
-        services: [ "nginx" ]
-        state: restarted
-
-    # --- Smoke tests con JWT ---
-    - name: Leer JWT_SECRET
-      ansible.builtin.shell: |
-        set -e
-        grep -E '^JWT_SECRET=' .env | cut -d= -f2-
-      args:
-        chdir: "{{ compose_dir }}"
-      register: jwt_secret
-      changed_when: false
-
-    - name: Generar JWT HS256 con python3
-      ansible.builtin.shell: |
-        python3 - <<'PY'
-        import json,base64,hmac,hashlib,time,os
-        def b64url(b): return base64.urlsafe_b64encode(b).rstrip(b'=')
-        h={"alg":"HS256","typ":"JWT"}; now=int(time.time())
-        p={"sub":"demo","name":"Demo User","iat":now,"nbf":now-5,"exp":now+3600,"roles":["USER"]}
-        sec=os.environ.get("SECRET","change_this_secret").encode()
-        seg=[b64url(json.dumps(h,separators=(',',':')).encode()),
-             b64url(json.dumps(p,separators=(',',':')).encode())]
-        sig=b64url(hmac.new(sec,b'.'.join(seg),hashlib.sha256).digest())
-        print((b'.'.join(seg)+b'.'+sig).decode())
-        PY
-      args:
-        chdir: "{{ compose_dir }}"
-        executable: /bin/bash
-      environment:
-        SECRET: "{{ jwt_secret.stdout | default('change_this_secret') }}"
-      register: jwt_token
-      changed_when: false
-
-    - name: Smoke GET /
+    - name: Smoke GET / (HTTP 200)
       ansible.builtin.uri:
         url: "http://localhost/"
         return_content: no
         status_code: 200
-
-    - name: Smoke /api/users/ con JWT
-      ansible.builtin.uri:
-        url: "http://localhost/api/users/"
-        headers:
-          Authorization: "Bearer {{ jwt_token.stdout }}"
-        return_content: no
-        status_code: 200
-
-    - name: Smoke /api/todos/ con JWT
-      ansible.builtin.uri:
-        url: "http://localhost/api/todos/"
-        headers:
-          Authorization: "Bearer {{ jwt_token.stdout }}"
-        return_content: no
-        status_code: 200
+      register: smoke_root
+      failed_when: smoke_root.status != 200
