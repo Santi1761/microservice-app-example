@@ -20,7 +20,7 @@ services:
   users-api:
     image: ${DOCKERHUB_USER}/users-api:${TAG}
     env_file: ./.env
-    ports: ["8083:8083"]     
+    ports: ["8083:8083"]   
   todos-api:
     image: ${DOCKERHUB_USER}/todos-api:${TAG}
     env_file: ./.env
@@ -29,7 +29,6 @@ services:
       - REDIS_URL=redis://redis:6379
       - PORT=8082
     ports: ["8082:8082"]     
-
 
 
   log-message-processor:
