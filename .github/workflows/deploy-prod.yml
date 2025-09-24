@@ -1,4 +1,5 @@
 name: deploy-prod
+
 on:
   workflow_dispatch:
   push:
@@ -25,7 +26,7 @@ jobs:
           pip install ansible ansible-lint
           ansible-galaxy collection install community.docker
 
-      - name: Agregar clave SSH (del Environment production)
+      - name: Agregar clave SSH (ENV production)
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -33,10 +34,45 @@ jobs:
       - name: Comprobar conectividad
         run: ssh -o StrictHostKeyChecking=no ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'echo ok'
 
-      - name: Ejecutar playbook de despliegue (prod)
+      - name: Despliegue con Ansible (production)
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
         run: |
-          ansible-inventory -i ops/ansible/inventory/hosts.ini --list
-          ansible all -i ops/ansible/inventory/hosts.ini -m ping
-          ansible-playbook -i ops/ansible/inventory/hosts.ini ops/ansible/playbooks/deploy.yml
+          ansible-playbook -i ops/ansible/inventory/hosts.ini ops/ansible/playbooks/deploy.yml -l production
+
+      - name: Smoke test (production)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /opt/microservice-app
+
+            until docker compose -f docker-compose.prod.yml exec -T users-api \
+              sh -lc 'curl -sf http://localhost:8083/actuator/health | grep -q UP'; do
+              echo "esperando users-api..."; sleep 3;
+            done
+
+            JWT_SECRET=$(grep -E '^JWT_SECRET=' .env | cut -d= -f2-)
+            [ -n "$JWT_SECRET" ] || { echo "Falta JWT_SECRET en .env"; exit 1; }
+
+            TOKEN=$(SECRET="$JWT_SECRET" python3 - <<'PY'
+            import os,json,base64,hmac,hashlib,time,base64 as b64
+            def b64url(x): return b64.urlsafe_b64encode(x).rstrip(b'=')
+            h={"alg":"HS256","typ":"JWT"}; now=int(time.time())
+            p={"sub":"demo","name":"Demo User","iat":now,"nbf":now-5,"exp":now+3600,"roles":["USER"]}
+            sec=os.environ["SECRET"].encode()
+            hdr=b64url(json.dumps(h,separators=(',',':')).encode())
+            pld=b64url(json.dumps(p,separators=(',',':')).encode())
+            import hmac,hashlib
+            sig=b64url(hmac.new(sec, hdr+b'.'+pld, hashlib.sha256).digest())
+            print((hdr+b'.'+pld+b'.'+sig).decode())
+            PY
+            )
+            CODE_ROOT=$(curl -sS -o /dev/null -w "%{http_code}" http://localhost/)
+            CODE_USERS=$(curl -sS -H "Authorization: Bearer ${TOKEN}" -o /dev/null -w "%{http_code}" http://localhost/api/users/)
+            CODE_TODOS=$(curl -sS -H "Authorization: Bearer ${TOKEN}" -o /dev/null -w "%{http_code}" http://localhost/api/todos/)
+            echo "/ -> $CODE_ROOT | /api/users -> $CODE_USERS | /api/todos -> $CODE_TODOS"
+            [ "$CODE_USERS" = "200" ] && [ "$CODE_TODOS" = "200" ]
