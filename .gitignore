@@ -1,0 +1,15 @@
+# artefactos
+**/node_modules/
+**/dist/
+**/build/
+**/target/
+# terraform
+**/.terraform/
+**/terraform.tfstate*
+**/crash.log
+# llaves
+**/*.pem
+**/private_ssh_key.pem
+# IDE
+**/.idea/
+**/.vscode/
