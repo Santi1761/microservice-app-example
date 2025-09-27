@@ -10,8 +10,9 @@
     compose_file: "{{ 'docker-compose.staging.yml' if 'staging' in group_names else 'docker-compose.prod.yml' }}"
     compose_src_dir: "{{ playbook_dir }}/../../compose"
     base_url: "{{ 'http://localhost:8080' if 'staging' in group_names else 'http://localhost' }}"
-    # Actuator correcto SIN prefijo /users
-    users_health_url: "http://localhost:8083/actuator/health"
+    users_health_candidates:
+      - "http://localhost:8083/actuator/health"
+      - "http://localhost:8083/users/actuator/health"
 
   tasks:
     # ---------- Esperar locks de apt ----------
@@ -140,14 +141,60 @@
       register: smoke_root
       failed_when: smoke_root.status != 200
 
-    # ---------- Esperar users-api UP (Actuator sin auth) ----------
-    - name: Esperar a users-api UP (actuator sin auth)
-      ansible.builtin.uri:
-        url: "{{ users_health_url }}"
-        method: GET
-        return_content: yes
-        status_code: 200
-      register: users_health
-      retries: 40
-      delay: 3
-      until: users_health.status == 200 and "'UP'" in (users_health.content | default(''))
+    # ---------- Leer JWT_SECRET del .env ----------
+    - name: Leer .env para extraer JWT_SECRET
+      ansible.builtin.slurp:
+        src: "{{ app_dir }}/.env"
+      register: env_slurp
+
+    - name: Setear jwt_secret
+      ansible.builtin.set_fact:
+        jwt_secret: >-
+          {{ (env_slurp.content | b64decode).splitlines()
+             | select('match','^JWT_SECRET=')
+             | first | regex_replace('^JWT_SECRET=','') }}
+
+    # ---------- Generar JWT en remoto ----------
+    - name: Generar JWT en remoto
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import os,json,base64,hmac,hashlib,time
+        def b64url(x): return base64.urlsafe_b64encode(x).rstrip(b'=')
+        now=int(time.time())
+        h={"alg":"HS256","typ":"JWT"}
+        p={"sub":"demo","name":"Demo User","iat":now,"nbf":now-5,"exp":now+3600,"roles":["USER"]}
+        sec=os.environ["SECRET"].encode()
+        enc=lambda d: b64url(json.dumps(d,separators=(',',':')).encode())
+        hdr=enc(h); pld=enc(p)
+        sig=b64url(hmac.new(sec, hdr+b'.'+pld, hashlib.sha256).digest())
+        print((hdr+b'.'+pld+b'.'+sig).decode())
+        PY
+      environment:
+        SECRET: "{{ jwt_secret }}"
+      register: jwt_token
+      changed_when: false
+
+    # ---------- Esperar users-api UP (Actuator protegido) ----------
+    - name: Esperar a users-api UP en alguna ruta del Actuator (con Authorization)
+      ansible.builtin.shell: |
+        set -e
+        token="{{ jwt_token.stdout }}"
+        # 40 intentos, 3s c/u (~2 min)
+        i=0
+        while [ $i -lt 40 ]; do
+          for u in {{ users_health_candidates | to_json }}; do
+            code=$(curl -sS -H "Authorization: Bearer $token" -o /dev/null -w "%{http_code}" "$u" || true)
+            if [ "$code" = "200" ]; then
+              echo "OK $u"
+              exit 0
+            fi
+          done
+          i=$((i+1))
+          sleep 3
+        done
+        echo "users-api no respondió 200 en ninguna ruta del actuator" >&2
+        exit 1
+      args:
+        executable: /bin/bash
+      register: wait_users
+      changed_when: false
