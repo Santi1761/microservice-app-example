@@ -56,8 +56,6 @@ services:
       - USERS_URL=http://users-api:8083
       - USER_SERVICE_URL=http://users-api:8083
       - USER_API_URL=http://users-api:8083
-    ports:
-      - "8081:8081"
     restart: unless-stopped
   
   log-message-processor:
