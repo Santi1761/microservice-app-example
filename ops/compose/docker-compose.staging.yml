@@ -63,6 +63,7 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - REDIS_CHANNEL=log_channel 
     depends_on:
       - redis
     restart: unless-stopped
