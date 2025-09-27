@@ -3,13 +3,11 @@
   hosts: all
   become: true
   environment:
-    DEBIAN_FRONTEND: noninteractive  # evita prompts de apt
+    DEBIAN_FRONTEND: noninteractive
 
   vars:
     app_dir: "{{ '/opt/microservice-app-stg' if 'staging' in group_names else '/opt/microservice-app' }}"
-    # Compose que se copia según el grupo del host
-    compose_file: "{{ 'docker-compose.stg.yml' if 'staging' in group_names else 'docker-compose.prod.yml' }}"
-    # Carpeta local (en el repo) desde donde copiamos los archivos
+    compose_file: "{{ 'docker-compose.staging.yml' if 'staging' in group_names else 'docker-compose.prod.yml' }}"
     compose_src_dir: "{{ playbook_dir }}/../../compose"
 
   tasks:
@@ -21,7 +19,7 @@
         while fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 3; done
       changed_when: false
 
-    # ---------- Prerrequisitos de Docker (idempotente) ----------
+    # ---------- Prerrequisitos de Docker----------
     - name: Paquetes base
       ansible.builtin.apt:
         name: [ 'ca-certificates', 'curl', 'gnupg', 'python3' ]
@@ -92,11 +90,15 @@
         state: directory
         mode: '0755'
 
-    - name: Subir .env (desde el repo)
-      ansible.builtin.copy:
-        src: "{{ compose_src_dir }}/.env"
+    - name: Render .env desde plantilla
+      ansible.builtin.template:
+        src: "{{ compose_src_dir }}/env.j2"
         dest: "{{ app_dir }}/.env"
         mode: '0640'
+      vars:
+        dockerhub_user: "{{ lookup('env','DOCKERHUB_USER') }}"
+        image_tag: "{{ lookup('env','IMAGE_TAG') }}"
+        jwt_secret: "{{ lookup('env','JWT_SECRET') }}"
 
     - name: Copiar docker-compose según entorno (stg/prod)
       ansible.builtin.copy:
@@ -121,7 +123,7 @@
 
     - name: Smoke GET /
       ansible.builtin.uri:
-        url: "http://localhost/"
+        url: "{{ 'http://localhost:8080/' if 'staging' in group_names else 'http://localhost/' }}"
         return_content: no
         status_code: 200
       register: smoke_root
