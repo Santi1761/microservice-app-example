@@ -207,3 +207,43 @@
       environment:
         SECRET: "{{ jwt_secret }}"
       register: jwt_token
+
+    - name: Esperar /api/users/ vía Nginx (200 con Bearer)
+      ansible.builtin.uri:
+        url: "{{ base_url }}/api/users/"
+        headers:
+          Authorization: "Bearer {{ jwt_token.stdout }}"
+        return_content: no
+        status_code: 200
+      register: wait_users
+      retries: 40
+      delay: 3
+      until: wait_users is succeeded and wait_users.status == 200
+
+    - name: Esperar /api/todos/ vía Nginx (200 con Bearer)
+      ansible.builtin.uri:
+        url: "{{ base_url }}/api/todos/"
+        headers:
+          Authorization: "Bearer {{ jwt_token.stdout }}"
+        return_content: no
+        status_code: 200
+      register: wait_todos
+      retries: 40
+      delay: 3
+      until: wait_todos is succeeded and wait_todos.status == 200
+
+    - name: Smoke /api/users/ via Nginx
+      ansible.builtin.uri:
+        url: "{{ base_url }}/api/users/"
+        headers:
+          Authorization: "Bearer {{ jwt_token.stdout }}"
+        return_content: no
+        status_code: 200
+
+    - name: Smoke /api/todos/ via Nginx
+      ansible.builtin.uri:
+        url: "{{ base_url }}/api/todos/"
+        headers:
+          Authorization: "Bearer {{ jwt_token.stdout }}"
+        return_content: no
+        status_code: 200
