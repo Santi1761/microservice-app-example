@@ -61,8 +61,7 @@ jobs:
 
             test -f docker-compose.prod.yml || { echo "FALTA /opt/microservice-app/docker-compose.prod.yml"; ls -la; exit 1; }
 
-            until docker compose -f docker-compose.prod.yml exec -T users-api \
-              sh -lc 'curl -sf http://localhost:8083/actuator/health | grep -q UP'; do
+            until curl -sf http://localhost:8083/actuator/health | grep -q UP; do
               echo "esperando users-api..."; sleep 3;
             done
 

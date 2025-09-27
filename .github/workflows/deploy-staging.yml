@@ -87,8 +87,7 @@ jobs:
             test -f docker-compose.staging.yml || { echo "FALTA /opt/microservice-app-stg/docker-compose.staging.yml"; ls -la; exit 1; }
 
             # Espera a users-api UP (evita 502)
-            until docker compose -f docker-compose.staging.yml exec -T users-api \
-              sh -lc 'curl -sf http://localhost:8083/actuator/health | grep -q UP'; do
+            until curl -sf http://localhost:8083/actuator/health | grep -q UP; do
               echo "esperando users-api..."; sleep 3;
             done
 
