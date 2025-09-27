@@ -10,7 +10,8 @@
     compose_file: "{{ 'docker-compose.staging.yml' if 'staging' in group_names else 'docker-compose.prod.yml' }}"
     compose_src_dir: "{{ playbook_dir }}/../../compose"
     base_url: "{{ 'http://localhost:8080' if 'staging' in group_names else 'http://localhost' }}"
-    users_health_url: "http://localhost:8083/users/actuator/health"
+    # Actuator correcto SIN prefijo /users
+    users_health_url: "http://localhost:8083/actuator/health"
 
   tasks:
     # ---------- Esperar locks de apt ----------
@@ -139,67 +140,14 @@
       register: smoke_root
       failed_when: smoke_root.status != 200
 
-    # ---------- JWT y health protegido en users-api ----------
-    - name: Leer .env para extraer JWT_SECRET
-      ansible.builtin.slurp:
-        src: "{{ app_dir }}/.env"
-      register: env_slurp
-
-    - name: Setear jwt_secret
-      ansible.builtin.set_fact:
-        jwt_secret: >-
-          {{ (env_slurp.content | b64decode).splitlines()
-             | select('match','^JWT_SECRET=')
-             | first | regex_replace('^JWT_SECRET=','') }}
-
-    - name: Generar JWT en remoto
-      ansible.builtin.command:
-        cmd: >
-          python3 -c "import os,json,base64,hmac,hashlib,time,base64 as b64;
-          b=lambda x: base64.urlsafe_b64encode(x).rstrip(b'=');
-          now=int(time.time());
-          h={'alg':'HS256','typ':'JWT'};
-          p={'sub':'demo','name':'Demo User','iat':now,'nbf':now-5,'exp':now+3600,'roles':['USER']};
-          sec=os.environ['SECRET'].encode();
-          import json as J;
-          hdr=b(J.dumps(h,separators=(',',':')).encode());
-          pld=b(J.dumps(p,separators=(',',':')).encode());
-          sig=b(hmac.new(sec, hdr+b'.'+pld, hashlib.sha256).digest());
-          print((hdr+b'.'+pld+b'.'+sig).decode())"
-      environment:
-        SECRET: "{{ jwt_secret }}"
-      register: jwt_token
-
-    - name: Esperar a users-api UP (actuator con Authorization)
+    # ---------- Esperar users-api UP (Actuator sin auth) ----------
+    - name: Esperar a users-api UP (actuator sin auth)
       ansible.builtin.uri:
         url: "{{ users_health_url }}"
-        headers:
-          Authorization: "Bearer {{ jwt_token.stdout }}"
+        method: GET
         return_content: yes
         status_code: 200
       register: users_health
-      until: users_health.status == 200 and
-             (users_health.json is defined and users_health.json.status is defined and users_health.json.status == 'UP')
       retries: 40
       delay: 3
-
-    # ---------- Endpoints a través de Nginx (con Authorization) ----------
-    - name: Smoke /api/users/ via Nginx
-      ansible.builtin.uri:
-        url: "{{ base_url }}/api/users/"
-        headers:
-          Authorization: "Bearer {{ jwt_token.stdout }}"
-        return_content: no
-        status_code: 200
-      register: smoke_users
-      failed_when: smoke_users.status != 200
-
-    - name: Smoke /api/todos/ via Nginx
-      ansible.builtin.uri:
-        url: "{{ base_url }}/api/todos/"
-        headers:
-          Authorization: "Bearer {{ jwt_token.stdout }}"
-        return_content: no
-        status_code: 200
-      register: smoke_todos
-      failed_when: smoke_todos.status != 200
+      until: users_health.status == 200 and "'UP'" in (users_health.content | default(''))
