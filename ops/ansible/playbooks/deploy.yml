@@ -21,6 +21,24 @@
         while fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 3; done
       changed_when: false
 
+    # 🚨 CORRECCIÓN CRÍTICA: Limpieza forzada de locks antes de instalar
+    - name: **[CRÍTICO] Forzar limpieza de locks de APT/dpkg**
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/dpkg/lock
+        - /var/lib/dpkg/lock-frontend
+        - /var/lib/apt/lists/lock
+        - /var/cache/apt/archives/lock
+      ignore_errors: true
+
+    - name: **[CRÍTICO] Forzar reconfiguración dpkg**
+      ansible.builtin.command: dpkg --configure -a
+      changed_when: false
+      ignore_errors: true
+    # ------------------------------------------------------------------
+
     # ---------- Prerrequisitos Docker ----------
     - name: Paquetes base
       ansible.builtin.apt:
@@ -29,10 +47,11 @@
         update_cache: yes
         cache_valid_time: 3600
         force_apt_get: yes
-      register: apt_install_result 
-      retries: 6                   
-      delay: 5                     
-      until: apt_install_result is succeeded 
+      # Retries ya incluidos
+      register: apt_install_result
+      retries: 6
+      delay: 5
+      until: apt_install_result is succeeded
 
     - name: Crear carpeta de keyrings
       ansible.builtin.file:
@@ -190,7 +209,3 @@
         state: present
         remove_orphans: true
       register: compose_up
-
-    # *******************************************************************
-    # ********* FIN DE CORRECCIÓN DE FLUJO ******************************
-    # *******************************************************************
