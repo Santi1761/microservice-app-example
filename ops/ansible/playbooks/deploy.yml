@@ -6,15 +6,11 @@
     DEBIAN_FRONTEND: noninteractive
 
   vars:
+    deploy_user: "{{ ansible_user | default('ubuntu') }}"
     app_dir: "{{ '/opt/microservice-app-stg' if 'staging' in group_names else '/opt/microservice-app' }}"
     compose_file: "{{ 'docker-compose.staging.yml' if 'staging' in group_names else 'docker-compose.prod.yml' }}"
     compose_src_dir: "{{ playbook_dir }}/../../compose"
     base_url: "{{ 'http://localhost:8080' if 'staging' in group_names else 'http://localhost' }}"
-    users_health_candidates:
-      - "http://localhost:8083/actuator/health"
-      - "http://localhost:8083/users/actuator/health"
-    # Cadena segura para 'for u in ...' => "url1" "url2"
-    users_health_candidates_cmd: "{{ users_health_candidates | map('quote') | join(' ') }}"
 
   tasks:
     # ---------- Esperar locks de apt ----------
@@ -42,7 +38,7 @@
 
     - name: Descargar llave GPG de Docker (ASCII)
       ansible.builtin.get_url:
-        url: https://download.docker.com/linux/ubuntu/gpg
+        url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
         dest: /etc/apt/keyrings/docker.asc
         mode: '0644'
         force: true
@@ -57,12 +53,13 @@
       ansible.builtin.deb822_repository:
         name: docker
         types: [deb]
-        uris: https://download.docker.com/linux/ubuntu
+        uris: https://download.docker.com/linux/{{ ansible_distribution | lower }}
         suites: "{{ ansible_distribution_release }}"
         components: [stable]
         signed_by: /etc/apt/keyrings/docker.gpg
         state: present
-        
+
+    # --------- Evitar cuelgues de APT y saltar update si ya hay Docker ----------
     - name: Configurar timeouts/retries de APT (10s, 3 reintentos)
       ansible.builtin.copy:
         dest: /etc/apt/apt.conf.d/99ansible-timeouts
@@ -74,14 +71,13 @@
           Acquire::Retries "3";
           Acquire::http::Pipeline-Depth "0";
 
-    # --- Detectar si docker-ce ya está instalado ---
     - name: Obtener lista de paquetes instalados
       ansible.builtin.package_facts:
         manager: auto
 
     - name: Marcar si Docker ya está instalado
       ansible.builtin.set_fact:
-        docker_installed: "{{ 'docker-ce' in ansible_facts.packages | default({}) }}"
+        docker_installed: "{{ 'docker-ce' in (ansible_facts.packages | default({})) }}"
 
     - name: Actualizar cache APT (solo si Docker no está instalado)
       ansible.builtin.apt:
@@ -89,11 +85,9 @@
         force_apt_get: yes
       when: not docker_installed
       register: apt_update_result
-      # si igual falla la red, reintenta poco tiempo
       retries: 3
       delay: 5
       until: apt_update_result is succeeded
-
 
     - name: Instalar Docker Engine, Buildx y Compose
       ansible.builtin.apt:
@@ -106,9 +100,9 @@
         state: present
         force_apt_get: yes
 
-    - name: Agregar usuario ubuntu al grupo docker
+    - name: Agregar usuario al grupo docker
       ansible.builtin.user:
-        name: ubuntu
+        name: "{{ deploy_user }}"
         groups: docker
         append: yes
 
@@ -122,34 +116,36 @@
         path: "{{ app_dir }}"
         state: directory
         mode: '0755'
-        owner: ubuntu
-        group: ubuntu
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
 
     - name: Render .env desde plantilla
       ansible.builtin.template:
         src: "{{ compose_src_dir }}/env.j2"
         dest: "{{ app_dir }}/.env"
         mode: '0640'
-        owner: ubuntu
-        group: ubuntu
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
       vars:
         dockerhub_user: "{{ lookup('env','DOCKERHUB_USER') }}"
         image_tag: "{{ lookup('env','IMAGE_TAG') }}"
-        jwt_secret: "{{ lookup('env','JWT_SECRET') }}"
+        jwt_secret_env: "{{ lookup('env','JWT_SECRET') }}"
 
     - name: Copiar docker-compose según entorno (stg/prod)
       ansible.builtin.copy:
         src: "{{ compose_src_dir }}/{{ compose_file }}"
         dest: "{{ app_dir }}/{{ compose_file }}"
         mode: '0644'
+        owner: root
+        group: root
 
     - name: Copiar nginx.conf
       ansible.builtin.copy:
         src: "{{ compose_src_dir }}/nginx.conf"
         dest: "{{ app_dir }}/nginx.conf"
         mode: '0644'
-        owner: ubuntu
-        group: ubuntu
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
 
     - name: Levantar stack con Docker Compose v2 (pull+up)
       community.docker.docker_compose_v2:
@@ -170,22 +166,21 @@
       register: smoke_root
       failed_when: smoke_root.status != 200
 
-    # ---------- Leer JWT_SECRET del .env ----------
+    # ---------- JWT para llamadas protegidas ----------
     - name: Leer .env para extraer JWT_SECRET
       ansible.builtin.slurp:
         src: "{{ app_dir }}/.env"
       register: env_slurp
 
-    - name: Setear jwt_secret
+    - name: Setear jwt_secret desde .env
       ansible.builtin.set_fact:
         jwt_secret: >-
           {{ (env_slurp.content | b64decode).splitlines()
              | select('match','^JWT_SECRET=')
              | first | regex_replace('^JWT_SECRET=','') }}
 
-    # ---------- Generar JWT en remoto ----------
     - name: Generar JWT en remoto
-      ansible.builtin.shell: |
+      ansible.builtin.command: |
         python3 - <<'PY'
         import os,json,base64,hmac,hashlib,time
         def b64url(x): return base64.urlsafe_b64encode(x).rstrip(b'=')
@@ -201,28 +196,45 @@
       environment:
         SECRET: "{{ jwt_secret }}"
       register: jwt_token
-      changed_when: false
 
-    # ---------- Esperar users-api UP (Actuator protegido) ----------
-    - name: Esperar a users-api UP en alguna ruta del Actuator (con Authorization)
-      ansible.builtin.shell: |
-        set -e
-        token="{{ jwt_token.stdout }}"
-        i=0
-        while [ $i -lt 40 ]; do
-          for u in {{ users_health_candidates_cmd }}; do
-            code=$(curl -sS --connect-timeout 2 -H "Authorization: Bearer $token" -o /dev/null -w "%{http_code}" "$u" || true)
-            if [ "$code" = "200" ]; then
-              echo "OK $u"
-              exit 0
-            fi
-          done
-          i=$((i+1))
-          sleep 3
-        done
-        echo "users-api no respondió 200 en ninguna ruta del actuator" >&2
-        exit 1
-      args:
-        executable: /bin/bash
+    # ---------- Esperar APIs reales detrás de Nginx (con Authorization) ----------
+    - name: Esperar /api/users/ vía Nginx (200 con Bearer)
+      ansible.builtin.uri:
+        url: "{{ base_url }}/api/users/"
+        headers:
+          Authorization: "Bearer {{ jwt_token.stdout }}"
+        return_content: no
+        status_code: 200
       register: wait_users
-      changed_when: false
+      retries: 40
+      delay: 3
+      until: wait_users is succeeded and wait_users.status == 200
+
+    - name: Esperar /api/todos/ vía Nginx (200 con Bearer)
+      ansible.builtin.uri:
+        url: "{{ base_url }}/api/todos/"
+        headers:
+          Authorization: "Bearer {{ jwt_token.stdout }}"
+        return_content: no
+        status_code: 200
+      register: wait_todos
+      retries: 40
+      delay: 3
+      until: wait_todos is succeeded and wait_todos.status == 200
+
+    # ---------- Smokes finales----------
+    - name: Smoke /api/users/ via Nginx
+      ansible.builtin.uri:
+        url: "{{ base_url }}/api/users/"
+        headers:
+          Authorization: "Bearer {{ jwt_token.stdout }}"
+        return_content: no
+        status_code: 200
+
+    - name: Smoke /api/todos/ via Nginx
+      ansible.builtin.uri:
+        url: "{{ base_url }}/api/todos/"
+        headers:
+          Authorization: "Bearer {{ jwt_token.stdout }}"
+        return_content: no
+        status_code: 200
