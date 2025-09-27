@@ -22,7 +22,7 @@
       changed_when: false
 
     # 🚨 CORRECCIÓN CRÍTICA: Limpieza forzada de locks antes de instalar
-    - name: **[CRÍTICO] Forzar limpieza de locks de APT/dpkg**
+    - name: Forzar limpieza de locks de APT/dpkg**
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
@@ -33,7 +33,7 @@
         - /var/cache/apt/archives/lock
       ignore_errors: true
 
-    - name: **[CRÍTICO] Forzar reconfiguración dpkg**
+    - name: Forzar reconfiguración dpkg**
       ansible.builtin.command: dpkg --configure -a
       changed_when: false
       ignore_errors: true
