@@ -62,11 +62,38 @@
         components: [stable]
         signed_by: /etc/apt/keyrings/docker.gpg
         state: present
+        
+    - name: Configurar timeouts/retries de APT (10s, 3 reintentos)
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/99ansible-timeouts
+        mode: '0644'
+        content: |
+          Acquire::http::Timeout "10";
+          Acquire::https::Timeout "10";
+          Acquire::ftp::Timeout "10";
+          Acquire::Retries "3";
+          Acquire::http::Pipeline-Depth "0";
 
-    - name: Actualizar cache APT
+    # --- Detectar si docker-ce ya está instalado ---
+    - name: Obtener lista de paquetes instalados
+      ansible.builtin.package_facts:
+        manager: auto
+
+    - name: Marcar si Docker ya está instalado
+      ansible.builtin.set_fact:
+        docker_installed: "{{ 'docker-ce' in ansible_facts.packages | default({}) }}"
+
+    - name: Actualizar cache APT (solo si Docker no está instalado)
       ansible.builtin.apt:
         update_cache: yes
         force_apt_get: yes
+      when: not docker_installed
+      register: apt_update_result
+      # si igual falla la red, reintenta poco tiempo
+      retries: 3
+      delay: 5
+      until: apt_update_result is succeeded
+
 
     - name: Instalar Docker Engine, Buildx y Compose
       ansible.builtin.apt:
