@@ -158,6 +158,18 @@
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
 
+    # *******************************************************************
+    # ********* CORRECCIÓN PARA FORZAR LA DESCARGA DE LA IMAGEN *********
+    # *******************************************************************
+    - name: Eliminar imagen antigua de users-api para forzar el pull
+      community.docker.docker_image:
+        name: "{{ lookup('env','DOCKERHUB_USER') }}/users-api"
+        tag: "{{ lookup('env','IMAGE_TAG') }}"
+        state: absent
+      ignore_errors: true # Si la imagen no existe o no tiene ese tag, ignora el error.
+    
+    # *******************************************************************
+    
     - name: Levantar stack con Docker Compose v2 (pull+up)
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
@@ -187,8 +199,8 @@
       ansible.builtin.set_fact:
         jwt_secret: >-
           {{ (env_slurp.content | b64decode).splitlines()
-             | select('match','^JWT_SECRET=')
-             | first | regex_replace('^JWT_SECRET=','') }}
+            | select('match','^JWT_SECRET=')
+            | first | regex_replace('^JWT_SECRET=','') }}
 
     - name: Generar JWT en remoto
       ansible.builtin.command: |
