@@ -119,6 +119,17 @@
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
 
+    # --- PRECHECK: JWT_SECRET debe existir en el entorno del runner ---
+    - name: Capturar JWT_SECRET del entorno del runner
+      ansible.builtin.set_fact:
+        jwt_secret_from_env: "{{ lookup('env','JWT_SECRET') | default('', true) }}"
+
+    - name: Verificar que JWT_SECRET esté definido
+      ansible.builtin.assert:
+        that:
+          - jwt_secret_from_env | length > 0
+        fail_msg: "JWT_SECRET no está definido en variables de entorno del pipeline. Configúralo en los secrets/vars del runner."
+
     - name: Render .env desde plantilla
       ansible.builtin.template:
         src: "{{ compose_src_dir }}/env.j2"
@@ -129,7 +140,7 @@
       vars:
         dockerhub_user: "{{ lookup('env','DOCKERHUB_USER') }}"
         image_tag: "{{ lookup('env','IMAGE_TAG') }}"
-        jwt_secret_env: "{{ lookup('env','JWT_SECRET') }}"
+        jwt_secret: "{{ jwt_secret_from_env }}"
 
     - name: Copiar docker-compose según entorno (stg/prod)
       ansible.builtin.copy:
@@ -222,7 +233,7 @@
       delay: 3
       until: wait_todos is succeeded and wait_todos.status == 200
 
-    # ---------- Smokes finales----------
+    # ---------- Smokes finales ----------
     - name: Smoke /api/users/ via Nginx
       ansible.builtin.uri:
         url: "{{ base_url }}/api/users/"
