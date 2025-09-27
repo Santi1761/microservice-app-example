@@ -48,7 +48,8 @@ services:
     image: ${DOCKERHUB_USER}/auth-api:${TAG}
     env_file: ./.env
     environment:
-      - SERVER_PORT=8081           
+      - SERVER_PORT=8081
+      - PORT=8081            
       - JWT_SECRET=${JWT_SECRET}
       - USERS_API_URL=http://users-api:8083
       - USERS_SERVICE_URL=http://users-api:8083
