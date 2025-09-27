@@ -161,20 +161,26 @@
     # *******************************************************************
     # ********* CORRECCIÓN PARA FORZAR LA DESCARGA DE LA IMAGEN *********
     # *******************************************************************
+    - name: Detener y eliminar stack existente (para liberar imágenes antiguas)
+      community.docker.docker_compose_v2:
+        project_src: "{{ app_dir }}"
+        files:
+          - "{{ compose_file }}"
+        state: absent
+      ignore_errors: true # Puede que el stack no exista la primera vez
+
     - name: Eliminar imagen antigua de users-api para forzar el pull
       community.docker.docker_image:
         name: "{{ lookup('env','DOCKERHUB_USER') }}/users-api"
         tag: "{{ lookup('env','IMAGE_TAG') }}"
         state: absent
-      ignore_errors: true # Si la imagen no existe o no tiene ese tag, ignora el error.
-    
-    # *******************************************************************
-    
+      ignore_errors: true # Si la imagen ya está libre o no existe, ignorar.
+
     - name: Levantar stack con Docker Compose v2 (pull+up)
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
         files:
-          - "{{ compose_file }}"
+        - "{{ compose_file }}"
         pull: always
         state: present
         remove_orphans: true
