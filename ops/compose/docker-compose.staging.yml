@@ -57,6 +57,14 @@ services:
       - USER_SERVICE_URL=http://users-api:8083
       - USER_API_URL=http://users-api:8083
     restart: unless-stopped
+    healthcheck: 
+      test: ["CMD", "curl", "-f", "http://localhost:8081/"] 
+      interval: 3s
+      timeout: 5s
+      retries: 50
+    depends_on:
+      users-api:
+        condition: service_healthy
   
   log-message-processor:
     image: ${DOCKERHUB_USER}/log-message-processor:${TAG}
