@@ -68,7 +68,7 @@ jobs:
           ANSIBLE_HOST_KEY_CHECKING: "False"
           ANSIBLE_STDOUT_CALLBACK: "yaml"
           DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          IMAGE_TAG: dev-${{ github.sha }}
+          IMAGE_TAG: dev-cf4514b4636c4fc5f7bc2578382ca1658ebdc642
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
         run: |
           ansible-playbook -vv -i ops/ansible/inventory/hosts.ini ops/ansible/playbooks/deploy.yml -l staging
