@@ -28,29 +28,39 @@ public class JwtAuthenticationFilter extends GenericFilterBean {
         final HttpServletResponse response = (HttpServletResponse) res;
         final String authHeader = request.getHeader("authorization");
 
+        // Manejo de CORS OPTIONS
         if ("OPTIONS".equals(request.getMethod())) {
             response.setStatus(HttpServletResponse.SC_OK);
-
             chain.doFilter(req, res);
-        } else {
+            return;
+        }
 
-            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                throw new ServletException("Missing or invalid Authorization header");
-            }
+        // 1. Verificar el formato del encabezado
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Missing or invalid Authorization header");
+            return; // Detener la cadena si falla
+        }
 
-            final String token = authHeader.substring(7);
+        final String token = authHeader.substring(7);
 
-            try {
-                final Claims claims = Jwts.parser()
-                        .setSigningKey(jwtSecret.getBytes())
-                        .parseClaimsJws(token)
-                        .getBody();
-                request.setAttribute("claims", claims);
-            } catch (final SignatureException e) {
-                throw new ServletException("Invalid token");
-            }
+        try {
+            // 2. Validar la firma del token
+            final Claims claims = Jwts.parser()
+                    .setSigningKey(jwtSecret.getBytes())
+                    .parseClaimsJws(token)
+                    .getBody();
 
+            // Si es válido, adjuntar los claims y continuar
+            request.setAttribute("claims", claims);
             chain.doFilter(req, res);
+
+        } catch (final SignatureException e) {
+            // 3. Firma inválida
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid token signature");
+            return; // Detener la cadena si falla
+        } catch (final Exception e) {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Token validation failed: " + e.getMessage());
+            return; // Detener la cadena si falla
         }
     }
 }
