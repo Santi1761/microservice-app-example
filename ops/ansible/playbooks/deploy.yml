@@ -13,6 +13,8 @@
     users_health_candidates:
       - "http://localhost:8083/actuator/health"
       - "http://localhost:8083/users/actuator/health"
+    # Cadena segura para 'for u in ...' => "url1" "url2"
+    users_health_candidates_cmd: "{{ users_health_candidates | map('quote') | join(' ') }}"
 
   tasks:
     # ---------- Esperar locks de apt ----------
@@ -179,11 +181,10 @@
       ansible.builtin.shell: |
         set -e
         token="{{ jwt_token.stdout }}"
-        # 40 intentos, 3s c/u (~2 min)
         i=0
         while [ $i -lt 40 ]; do
-          for u in {{ users_health_candidates | to_json }}; do
-            code=$(curl -sS -H "Authorization: Bearer $token" -o /dev/null -w "%{http_code}" "$u" || true)
+          for u in {{ users_health_candidates_cmd }}; do
+            code=$(curl -sS --connect-timeout 2 -H "Authorization: Bearer $token" -o /dev/null -w "%{http_code}" "$u" || true)
             if [ "$code" = "200" ]; then
               echo "OK $u"
               exit 0
