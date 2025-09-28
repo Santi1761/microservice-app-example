@@ -23,11 +23,11 @@ services:
 
   users-api:
     image: ${DOCKERHUB_USER}/users-api:${TAG}
-    env_file: ./.env
+    env_file: ./.env  <-- Esto inyecta las variables de env.j2
     environment:
-      - SERVER_PORT=8083           
+    - SERVER_PORT=8083  
     ports:
-      - "8083:8083"
+    - "8083:8083"
     restart: unless-stopped
 
   todos-api:
