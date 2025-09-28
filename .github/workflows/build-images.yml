@@ -29,6 +29,7 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
+      # Evita rate-limit y problemas de infra corriendo una imagen a la vez
       max-parallel: 1
       matrix:
         include:
@@ -47,20 +48,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Buildx + mirror para imágenes "library" (node/nginx/redis) si alguna quedara en docker.io
+      # Builder estable sin contenedor externo (evita el "restarting" del buildkitd)
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          buildkitd-flags: --registry-mirror https://mirror.gcr.io
+          driver: docker         # <-- importante
+          install: true
+          cleanup: true
 
-      # Login a Docker Hub SOLO para hacer push de tus imágenes 
       - name: Docker Hub login
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Build & Push con caché GHA 
       - name: Build & push ${{ matrix.name }}
         uses: docker/build-push-action@v6
         with:
