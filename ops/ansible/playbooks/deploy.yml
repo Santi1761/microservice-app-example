@@ -1,5 +1,5 @@
 ---
-- name: Deploy microservice-app (auto: staging/prod)
+- name: "Deploy microservice-app (auto: staging/prod)"
   hosts: all
   become: true
   environment:
@@ -163,14 +163,14 @@
       notify: reload nginx
 
     # --- compose up ---
-    - name: Tear down existing stack (ignore if first time)
+    - name: "Tear down existing stack (ignore if first time)"
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
         files: ["{{ compose_file }}"]
         state: absent
       ignore_errors: true
 
-    - name: Up stack (pull: always)
+    - name: "Up stack (pull: always)"
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
         files: ["{{ compose_file }}"]
