@@ -122,10 +122,17 @@ jobs:
 
       - name: Deploy with Ansible (staging)
         env:
+          # ✅ Evita el callback deprecated y muestra YAML con el plugin builtin
+          ANSIBLE_STDOUT_CALLBACK: "default"
+          ANSIBLE_CALLBACK_RESULT_FORMAT: "yaml"
           ANSIBLE_HOST_KEY_CHECKING: "False"
-          ANSIBLE_STDOUT_CALLBACK: "yaml"
+
+          # App vars
           DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           IMAGE_TAG: ${{ env.FINAL_TAG }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
+
+          # ✅ Clave: saltar bootstrap (APT/Docker) para que no se cuelgue
+          SKIP_BOOTSTRAP: "true"
         run: |
           ansible-playbook -vv -i ops/ansible/inventory/hosts.ini ops/ansible/playbooks/deploy.yml -l staging

@@ -1,9 +1,7 @@
 ---
-- name: "Deploy microservice-app (auto: staging/prod)"
+- name: Deploy microservice-app (auto: staging/prod)
   hosts: all
   become: true
-  collections:
-    - community.docker
   environment:
     DEBIAN_FRONTEND: noninteractive
 
@@ -12,45 +10,77 @@
     app_dir: "{{ '/opt/microservice-app-stg' if 'staging' in group_names else '/opt/microservice-app' }}"
     compose_file: "{{ 'docker-compose.staging.yml' if 'staging' in group_names else 'docker-compose.prod.yml' }}"
     compose_src_dir: "{{ playbook_dir }}/../../compose"
+    base_url: "{{ 'http://localhost:8080' if 'staging' in group_names else 'http://localhost' }}"
+    # 👇 Flag para forzar saltar bootstrap desde el pipeline (opcional)
+    skip_bootstrap: "{{ (lookup('env','SKIP_BOOTSTRAP') | default('false')) | bool }}"
+
+  handlers:
+    - name: reload nginx
+      ansible.builtin.command: >
+        docker compose --env-file ./.env -f {{ compose_file }} up -d --no-deps nginx
+      args:
+        chdir: "{{ app_dir }}"
 
   tasks:
-    - name: "Wait for APT/dpkg locks if in use"
+    # --------- Detección temprana de Docker para evitar APT lentos ----------
+    - name: Check if Docker is already installed
+      ansible.builtin.command: docker --version
+      register: docker_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: Set docker_installed fact
+      ansible.builtin.set_fact:
+        docker_installed: "{{ docker_check.rc == 0 }}"
+
+    # ---------- Esperar locks de apt (solo si vamos a bootstrapped) ----------
+    - name: Wait for APT/dpkg locks if in use
       ansible.builtin.shell: |
         set -e
         while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 3; done
         while fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 3; done
       changed_when: false
+      when: not skip_bootstrap and not docker_installed
 
-    - name: "Install base packages"
+    # ---------- Prerrequisitos Docker (condicionales) ----------
+    - name: Install base packages
       ansible.builtin.apt:
-        name: [ca-certificates, curl, gnupg, python3]
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - python3
         state: present
         update_cache: yes
-        force_apt_get: yes
       register: apt_base
       retries: 5
       delay: 5
       until: apt_base is succeeded
+      when: not skip_bootstrap and not docker_installed
 
-    - name: "Ensure keyrings dir"
+    - name: Ensure keyrings dir
       ansible.builtin.file:
         path: /etc/apt/keyrings
         state: directory
         mode: '0755'
+      when: not skip_bootstrap and not docker_installed
 
-    - name: "Fetch Docker GPG (ASCII)"
+    - name: Download Docker GPG (ASCII)
       ansible.builtin.get_url:
         url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
         dest: /etc/apt/keyrings/docker.asc
         mode: '0644'
         force: true
+      when: not skip_bootstrap and not docker_installed
 
-    - name: "Dearmor GPG"
-      ansible.builtin.command: gpg --dearmor -o /etc/apt/keyrings/docker.gpg /etc/apt/keyrings/docker.asc
+    - name: Dearmor Docker GPG
+      ansible.builtin.command: >
+        gpg --dearmor -o /etc/apt/keyrings/docker.gpg /etc/apt/keyrings/docker.asc
       args:
         creates: /etc/apt/keyrings/docker.gpg
+      when: not skip_bootstrap and not docker_installed
 
-    - name: "Add Docker repo (deb822)"
+    - name: Add Docker repo (deb822)
       ansible.builtin.deb822_repository:
         name: docker
         types: [deb]
@@ -59,19 +89,9 @@
         components: [stable]
         signed_by: /etc/apt/keyrings/docker.gpg
         state: present
+      when: not skip_bootstrap and not docker_installed
 
-    - name: "APT timeouts/retries"
-      ansible.builtin.copy:
-        dest: /etc/apt/apt.conf.d/99ansible-timeouts
-        mode: '0644'
-        content: |
-          Acquire::http::Timeout "10";
-          Acquire::https::Timeout "10";
-          Acquire::ftp::Timeout "10";
-          Acquire::Retries "3";
-          Acquire::http::Pipeline-Depth "0";
-
-    - name: "Install Docker Engine + Buildx + Compose v2"
+    - name: Install Docker Engine & Compose v2
       ansible.builtin.apt:
         name:
           - docker-ce
@@ -81,19 +101,21 @@
           - docker-compose-plugin
         state: present
         update_cache: yes
-        force_apt_get: yes
       register: apt_docker
       retries: 5
       delay: 5
       until: apt_docker is succeeded
+      when: not skip_bootstrap and not docker_installed
 
-    - name: "Add user to docker group"
+    - name: Add user to docker group
       ansible.builtin.user:
         name: "{{ deploy_user }}"
         groups: docker
         append: yes
+      when: not skip_bootstrap and not docker_installed
 
-    - name: "Create app dir"
+    # ---------- Despliegue ----------
+    - name: Ensure app dir
       ansible.builtin.file:
         path: "{{ app_dir }}"
         state: directory
@@ -101,17 +123,17 @@
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
 
-    - name: "Capture JWT_SECRET from runner env"
+    - name: Capture JWT_SECRET from runner env
       ansible.builtin.set_fact:
         jwt_secret_from_env: "{{ lookup('env','JWT_SECRET') | default('', true) }}"
 
-    - name: "Assert JWT_SECRET present"
+    - name: Assert JWT_SECRET is present
       ansible.builtin.assert:
         that:
           - jwt_secret_from_env | length > 0
-        fail_msg: "JWT_SECRET missing in runner env (set it in repo/org secrets)."
+        fail_msg: "JWT_SECRET is missing in CI env."
 
-    - name: "Render .env from template"
+    - name: Render .env from template
       ansible.builtin.template:
         src: "{{ compose_src_dir }}/env.j2"
         dest: "{{ app_dir }}/.env"
@@ -120,10 +142,10 @@
         group: "{{ deploy_user }}"
       vars:
         dockerhub_user: "{{ lookup('env','DOCKERHUB_USER') }}"
-        image_tag: "{{ lookup('env','IMAGE_TAG') }}"
+        image_tag: "{{ lookup('env','IMAGE_TAG') | default('latest', true) }}"
         jwt_secret: "{{ jwt_secret_from_env }}"
 
-    - name: "Copy docker-compose file"
+    - name: Copy docker-compose file
       ansible.builtin.copy:
         src: "{{ compose_src_dir }}/{{ compose_file }}"
         dest: "{{ app_dir }}/{{ compose_file }}"
@@ -131,52 +153,27 @@
         owner: root
         group: root
 
-    - name: "Copy nginx.conf"
+    - name: Copy nginx.conf
       ansible.builtin.copy:
         src: "{{ compose_src_dir }}/nginx.conf"
         dest: "{{ app_dir }}/nginx.conf"
         mode: '0644'
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
+      notify: reload nginx
 
-    # ------- Deploy with fallback -------
-    - block:
-        - name: "Tear down existing stack (ignore if first time)"
-          community.docker.docker_compose_v2:
-            project_src: "{{ app_dir }}"
-            files:
-              - "{{ compose_file }}"
-            state: absent
-          ignore_errors: true
+    # --- compose up ---
+    - name: Tear down existing stack (ignore if first time)
+      community.docker.docker_compose_v2:
+        project_src: "{{ app_dir }}"
+        files: ["{{ compose_file }}"]
+        state: absent
+      ignore_errors: true
 
-        - name: "Pull and start stack (pull: always)"
-          community.docker.docker_compose_v2:
-            project_src: "{{ app_dir }}"
-            files:
-              - "{{ compose_file }}"
-            pull: always
-            state: present
-            remove_orphans: true
-          register: compose_up
-
-      rescue:
-        - name: "Fallback: re-render .env with TAG=latest"
-          ansible.builtin.template:
-            src: "{{ compose_src_dir }}/env.j2"
-            dest: "{{ app_dir }}/.env"
-            mode: '0640'
-            owner: "{{ deploy_user }}"
-            group: "{{ deploy_user }}"
-          vars:
-            dockerhub_user: "{{ lookup('env','DOCKERHUB_USER') }}"
-            image_tag: "latest"
-            jwt_secret: "{{ jwt_secret_from_env }}"
-
-        - name: "Start stack with fallback :latest"
-          community.docker.docker_compose_v2:
-            project_src: "{{ app_dir }}"
-            files:
-              - "{{ compose_file }}"
-            pull: always
-            state: present
-            remove_orphans: true
+    - name: Up stack (pull: always)
+      community.docker.docker_compose_v2:
+        project_src: "{{ app_dir }}"
+        files: ["{{ compose_file }}"]
+        pull: always
+        state: present
+        remove_orphans: true
