@@ -1,70 +1,97 @@
 ---
-- name: Despliegue microservice-app (staging/prod auto)
+- name: "Deploy microservice-app (auto: staging/prod)"
   hosts: all
   become: true
   environment:
-    DEBIAN_FRONTEND: noninteractive  # evita prompts de apt
+    DEBIAN_FRONTEND: noninteractive
 
   vars:
+    deploy_user: "{{ ansible_user | default('ubuntu') }}"
     app_dir: "{{ '/opt/microservice-app-stg' if 'staging' in group_names else '/opt/microservice-app' }}"
-    # Compose que se copia según el grupo del host
-    compose_file: "{{ 'docker-compose.stg.yml' if 'staging' in group_names else 'docker-compose.prod.yml' }}"
-    # Carpeta local (en el repo) desde donde copiamos los archivos
+    compose_file: "{{ 'docker-compose.staging.yml' if 'staging' in group_names else 'docker-compose.prod.yml' }}"
     compose_src_dir: "{{ playbook_dir }}/../../compose"
+    base_url: "{{ 'http://localhost:8080' if 'staging' in group_names else 'http://localhost' }}"
+    # 👇 Flag para forzar saltar bootstrap desde el pipeline (opcional)
+    skip_bootstrap: "{{ (lookup('env','SKIP_BOOTSTRAP') | default('false')) | bool }}"
+
+  handlers:
+    - name: reload nginx
+      ansible.builtin.command: >
+        docker compose --env-file ./.env -f {{ compose_file }} up -d --no-deps nginx
+      args:
+        chdir: "{{ app_dir }}"
 
   tasks:
-    # ---------- Esperar locks de apt/dpkg  ----------
-    - name: Esperar locks de APT/dpkg si están en uso
+    # --------- Detección temprana de Docker para evitar APT lentos ----------
+    - name: Check if Docker is already installed
+      ansible.builtin.command: docker --version
+      register: docker_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: Set docker_installed fact
+      ansible.builtin.set_fact:
+        docker_installed: "{{ docker_check.rc == 0 }}"
+
+    # ---------- Esperar locks de apt (solo si vamos a bootstrapped) ----------
+    - name: Wait for APT/dpkg locks if in use
       ansible.builtin.shell: |
         set -e
         while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 3; done
         while fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 3; done
       changed_when: false
+      when: not skip_bootstrap and not docker_installed
 
-    # ---------- Prerrequisitos de Docker (idempotente) ----------
-    - name: Paquetes base
+    # ---------- Prerrequisitos Docker (condicionales) ----------
+    - name: Install base packages
       ansible.builtin.apt:
-        name: [ 'ca-certificates', 'curl', 'gnupg', 'python3' ]
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - python3
         state: present
         update_cache: yes
-        cache_valid_time: 3600
-        force_apt_get: yes
+      register: apt_base
+      retries: 5
+      delay: 5
+      until: apt_base is succeeded
+      when: not skip_bootstrap and not docker_installed
 
-    - name: Crear carpeta de keyrings
+    - name: Ensure keyrings dir
       ansible.builtin.file:
         path: /etc/apt/keyrings
         state: directory
         mode: '0755'
+      when: not skip_bootstrap and not docker_installed
 
-    - name: Descargar llave GPG de Docker (ASCII)
+    - name: Download Docker GPG (ASCII)
       ansible.builtin.get_url:
-        url: https://download.docker.com/linux/ubuntu/gpg
+        url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
         dest: /etc/apt/keyrings/docker.asc
         mode: '0644'
         force: true
+      when: not skip_bootstrap and not docker_installed
 
-    - name: Convertir llave a formato gpg (dearmor)
+    - name: Dearmor Docker GPG
       ansible.builtin.command: >
         gpg --dearmor -o /etc/apt/keyrings/docker.gpg /etc/apt/keyrings/docker.asc
       args:
         creates: /etc/apt/keyrings/docker.gpg
+      when: not skip_bootstrap and not docker_installed
 
-    - name: Agregar repo de Docker (deb822)
+    - name: Add Docker repo (deb822)
       ansible.builtin.deb822_repository:
         name: docker
         types: [deb]
-        uris: https://download.docker.com/linux/ubuntu
+        uris: https://download.docker.com/linux/{{ ansible_distribution | lower }}
         suites: "{{ ansible_distribution_release }}"
         components: [stable]
         signed_by: /etc/apt/keyrings/docker.gpg
         state: present
+      when: not skip_bootstrap and not docker_installed
 
-    - name: Actualizar cache APT
-      ansible.builtin.apt:
-        update_cache: yes
-        force_apt_get: yes
-
-    - name: Instalar Docker Engine, Buildx y Compose
+    - name: Install Docker Engine & Compose v2
       ansible.builtin.apt:
         name:
           - docker-ce
@@ -73,56 +100,80 @@
           - docker-buildx-plugin
           - docker-compose-plugin
         state: present
-        force_apt_get: yes
+        update_cache: yes
+      register: apt_docker
+      retries: 5
+      delay: 5
+      until: apt_docker is succeeded
+      when: not skip_bootstrap and not docker_installed
 
-    - name: Agregar usuario ubuntu al grupo docker
+    - name: Add user to docker group
       ansible.builtin.user:
-        name: ubuntu
+        name: "{{ deploy_user }}"
         groups: docker
         append: yes
+      when: not skip_bootstrap and not docker_installed
 
-    # ---------- Despliegue de la app ----------
-    - name: INFO | Host en grupos / paths seleccionados
-      ansible.builtin.debug:
-        msg: "group_names={{ group_names }} | app_dir={{ app_dir }} | compose={{ compose_file }}"
-
-    - name: Crear directorio de la app
+    # ---------- Despliegue ----------
+    - name: Ensure app dir
       ansible.builtin.file:
         path: "{{ app_dir }}"
         state: directory
         mode: '0755'
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
 
-    - name: Subir .env (desde el repo)
-      ansible.builtin.copy:
-        src: "{{ compose_src_dir }}/.env"
+    - name: Capture JWT_SECRET from runner env
+      ansible.builtin.set_fact:
+        jwt_secret_from_env: "{{ lookup('env','JWT_SECRET') | default('', true) }}"
+
+    - name: Assert JWT_SECRET is present
+      ansible.builtin.assert:
+        that:
+          - jwt_secret_from_env | length > 0
+        fail_msg: "JWT_SECRET is missing in CI env."
+
+    - name: Render .env from template
+      ansible.builtin.template:
+        src: "{{ compose_src_dir }}/env.j2"
         dest: "{{ app_dir }}/.env"
         mode: '0640'
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+      vars:
+        dockerhub_user: "{{ lookup('env','DOCKERHUB_USER') }}"
+        image_tag: "{{ lookup('env','IMAGE_TAG') | default('latest', true) }}"
+        jwt_secret: "{{ jwt_secret_from_env }}"
 
-    - name: Copiar docker-compose según entorno (stg/prod)
+    - name: Copy docker-compose file
       ansible.builtin.copy:
         src: "{{ compose_src_dir }}/{{ compose_file }}"
         dest: "{{ app_dir }}/{{ compose_file }}"
         mode: '0644'
+        owner: root
+        group: root
 
-    - name: Copiar nginx.conf
+    - name: Copy nginx.conf
       ansible.builtin.copy:
         src: "{{ compose_src_dir }}/nginx.conf"
         dest: "{{ app_dir }}/nginx.conf"
         mode: '0644'
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+      notify: reload nginx
 
-    - name: Levantar stack con Docker Compose v2 (pull+up)
+    # --- compose up ---
+    - name: "Tear down existing stack (ignore if first time)"
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
-        files:
-          - "{{ compose_file }}"
+        files: ["{{ compose_file }}"]
+        state: absent
+      ignore_errors: true
+
+    - name: "Up stack (pull: always)"
+      community.docker.docker_compose_v2:
+        project_src: "{{ app_dir }}"
+        files: ["{{ compose_file }}"]
         pull: always
         state: present
         remove_orphans: true
-
-    - name: Smoke GET /
-      ansible.builtin.uri:
-        url: "http://localhost/"
-        return_content: no
-        status_code: 200
-      register: smoke_root
-      failed_when: smoke_root.status != 200

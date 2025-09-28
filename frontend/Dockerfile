@@ -1,7 +1,8 @@
-# frontend/Dockerfile  (Vue2 + webpack + node-sass 4.x; basado en Node 8)
-FROM node:8.17.0 AS build
+# Builder Node 8 (EOL) desde el mirror de Google
+FROM mirror.gcr.io/library/node:8.17.0 AS build
 WORKDIR /app
 
+# Fix repos stretch como ya tenías
 RUN set -eux; \
     sed -i -e 's/deb.debian.org/archive.debian.org/g' \
     -e 's|security.debian.org|archive.debian.org|g' \
@@ -11,16 +12,14 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends python make g++ ca-certificates; \
     rm -rf /var/lib/apt/lists/*
 
-# Copiamos manifiestos; si hay lock usamos npm ci, si no npm install
 COPY package*.json ./
 RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; \
     else npm install --no-audit --no-fund; fi
 
-# Copiamos el resto del código y construimos
 COPY . .
 RUN npm run build
 
-# Imagen final: Nginx sirviendo /dist
-FROM nginx:alpine
+# Runtime Nginx desde el mirror de Google
+FROM mirror.gcr.io/library/nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80

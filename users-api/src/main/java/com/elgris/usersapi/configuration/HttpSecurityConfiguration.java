@@ -3,6 +3,7 @@ package com.elgris.usersapi.configuration;
 import com.elgris.usersapi.security.JwtAuthenticationFilter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableGlobalMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -21,7 +22,12 @@ class HttpSecurityConfiguration {
 
         @Override
         protected void configure(HttpSecurity http) throws Exception {
-            http.antMatcher("/**")
+            http
+                    .csrf().disable()
+                    .authorizeRequests()
+                    .antMatchers(HttpMethod.GET, "/users/**").permitAll()
+                    .anyRequest().authenticated()
+                    .and()
                     .addFilterAfter(jwtAuthenticationFilter, BasicAuthenticationFilter.class);
         }
     }

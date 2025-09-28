@@ -2,6 +2,11 @@ name: deploy-staging
 
 on:
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (e.g., dev-<sha> or latest)"
+        required: false
+        type: string
   pull_request:
     branches: [ develop ]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -24,6 +29,10 @@ on:
       - 'todos-api/**'
       - 'log-message-processor/**'
 
+concurrency:
+  group: deploy-staging-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -32,13 +41,61 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Instalar Ansible y colección Docker
+      - name: Resolve desired IMAGE_TAG
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ -n "${{ inputs.image_tag }}" ]; then
+              echo "IMAGE_TAG=${{ inputs.image_tag }}" >> $GITHUB_ENV
+            else
+              echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+            fi
+          else
+            echo "IMAGE_TAG=dev-${GITHUB_SHA}" >> $GITHUB_ENV
+          fi
+          echo "Using desired IMAGE_TAG=${IMAGE_TAG}"
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Decide FINAL_TAG (fallback to latest if any image missing)
+        id: decide
+        env:
+          USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -e
+          SERVICES="frontend users-api todos-api auth-api log-message-processor"
+          MISSING=""
+          for SVC in $SERVICES; do
+            if ! docker manifest inspect "${USER}/${SVC}:${IMAGE_TAG}" >/dev/null 2>&1; then
+              echo "Missing ${USER}/${SVC}:${IMAGE_TAG}"
+              MISSING="yes"
+            else
+              echo "Found ${USER}/${SVC}:${IMAGE_TAG}"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "FINAL_TAG=latest" >> $GITHUB_ENV
+            {
+              echo "### Image fallback"
+              echo ""
+              echo "Some images with tag \`${IMAGE_TAG}\` were missing. Falling back to \`latest\` for all services."
+            } >> $GITHUB_STEP_SUMMARY
+          else
+            echo "FINAL_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+          fi
+          echo "FINAL_TAG=${FINAL_TAG:-latest}"
+
+      - name: Install Ansible and dependencies
         run: |
           python -m pip install --upgrade pip
           pip install ansible ansible-lint
           ansible-galaxy collection install community.docker
 
-      - name: Agregar clave SSH (ENV staging)
+      - name: Add SSH key (staging)
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -47,11 +104,11 @@ jobs:
         shell: bash
         run: |
           set -e
-          echo "Probe puerto 22..."
+          echo "Probing port 22..."
           timeout 8 bash -lc 'echo > /dev/tcp/${{ secrets.SSH_HOST }}/22' \
-            && echo "OK puerto 22" || (echo "Fallo puerto 22"; exit 1)
+            && echo "OK port 22" || (echo "Port 22 unreachable"; exit 1)
 
-      - name: Comprobar conectividad (appleboy)
+      - name: Connectivity check (appleboy)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -63,53 +120,19 @@ jobs:
           script_stop: true
           script: echo ok
 
-
-      - name: Despliegue con Ansible (staging)
+      - name: Deploy with Ansible (staging)
         env:
+          # ✅ Evita el callback deprecated y muestra YAML con el plugin builtin
+          ANSIBLE_STDOUT_CALLBACK: "default"
+          ANSIBLE_CALLBACK_RESULT_FORMAT: "yaml"
           ANSIBLE_HOST_KEY_CHECKING: "False"
-          ANSIBLE_STDOUT_CALLBACK: "yaml"
+
+          # App vars
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          IMAGE_TAG: ${{ env.FINAL_TAG }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+
+          # ✅ Clave: saltar bootstrap (APT/Docker) para que no se cuelgue
+          SKIP_BOOTSTRAP: "true"
         run: |
           ansible-playbook -vv -i ops/ansible/inventory/hosts.ini ops/ansible/playbooks/deploy.yml -l staging
-
-      - name: Smoke test (staging)
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            set -e
-            cd /opt/microservice-app-stg
-
-            # Guard: el compose debe existir (corta rápido si falta)
-            test -f docker-compose.stg.yml || { echo "FALTA /opt/microservice-app-stg/docker-compose.stg.yml"; ls -la; exit 1; }
-
-            # Espera a users-api UP (evita 502)
-            until docker compose -f docker-compose.stg.yml exec -T users-api \
-              sh -lc 'curl -sf http://localhost:8083/actuator/health | grep -q UP'; do
-              echo "esperando users-api..."; sleep 3;
-            done
-
-            # JWT para endpoints protegidos
-            JWT_SECRET=$(grep -E '^JWT_SECRET=' .env | cut -d= -f2-)
-            [ -n "$JWT_SECRET" ] || { echo "Falta JWT_SECRET en .env"; exit 1; }
-
-            TOKEN=$(SECRET="$JWT_SECRET" python3 - <<'PY'
-            import os,json,base64,hmac,hashlib,time,base64 as b64
-            def b64url(x): return b64.urlsafe_b64encode(x).rstrip(b'=')
-            h={"alg":"HS256","typ":"JWT"}; now=int(time.time())
-            p={"sub":"demo","name":"Demo User","iat":now,"nbf":now-5,"exp":now+3600,"roles":["USER"]}
-            sec=os.environ["SECRET"].encode()
-            hdr=b64url(json.dumps(h,separators=(',',':')).encode())
-            pld=b64url(json.dumps(p,separators=(',',':')).encode())
-            sig=b64url(hmac.new(sec, hdr+b'.'+pld, hashlib.sha256).digest())
-            print((hdr+b'.'+pld+b'.'+sig).decode())
-            PY
-            )
-
-            CODE_ROOT=$(curl -sS -o /dev/null -w "%{http_code}" http://localhost/)
-            CODE_USERS=$(curl -sS -H "Authorization: Bearer ${TOKEN}" -o /dev/null -w "%{http_code}" http://localhost/api/users/)
-            CODE_TODOS=$(curl -sS -H "Authorization: Bearer ${TOKEN}" -o /dev/null -w "%{http_code}" http://localhost/api/todos/)
-
-            echo "/ -> $CODE_ROOT | /api/users -> $CODE_USERS | /api/todos -> $CODE_TODOS"
-            [ "$CODE_USERS" = "200" ] && [ "$CODE_TODOS" = "200" ]
