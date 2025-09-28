@@ -21,46 +21,51 @@ public class JwtAuthenticationFilter extends GenericFilterBean {
     @Value("${jwt.secret}")
     private String jwtSecret;
 
+    @Override
     public void doFilter(final ServletRequest req, final ServletResponse res, final FilterChain chain)
             throws IOException, ServletException {
 
         final HttpServletRequest request = (HttpServletRequest) req;
         final HttpServletResponse response = (HttpServletResponse) res;
-        final String authHeader = request.getHeader("authorization");
 
-        // Manejo de CORS OPTIONS
-        if ("OPTIONS".equals(request.getMethod())) {
+        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
             response.setStatus(HttpServletResponse.SC_OK);
             chain.doFilter(req, res);
             return;
         }
 
-        // 1. Verificar el formato del encabezado
+        final String uri = request.getRequestURI();
+        final boolean isPublicUsersGet = "GET".equalsIgnoreCase(request.getMethod())
+                && uri != null
+                && (uri.equals("/users") || uri.equals("/users/") || uri.startsWith("/users/"));
+
+        final String authHeader = request.getHeader("authorization");
+
+        if (isPublicUsersGet && (authHeader == null || !authHeader.startsWith("Bearer "))) {
+            chain.doFilter(req, res);
+            return;
+        }
+
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Missing or invalid Authorization header");
-            return; // Detener la cadena si falla
+            return;
         }
 
         final String token = authHeader.substring(7);
 
         try {
-            // 2. Validar la firma del token
             final Claims claims = Jwts.parser()
                     .setSigningKey(jwtSecret.getBytes())
                     .parseClaimsJws(token)
                     .getBody();
 
-            // Si es válido, adjuntar los claims y continuar
             request.setAttribute("claims", claims);
             chain.doFilter(req, res);
 
         } catch (final SignatureException e) {
-            // 3. Firma inválida
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid token signature");
-            return; // Detener la cadena si falla
         } catch (final Exception e) {
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Token validation failed: " + e.getMessage());
-            return; // Detener la cadena si falla
         }
     }
 }

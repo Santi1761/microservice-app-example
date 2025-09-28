@@ -18,30 +18,23 @@ public class UsersController {
     @Autowired
     private UserRepository userRepository;
 
-
     @RequestMapping(value = "/", method = RequestMethod.GET)
     public List<User> getUsers() {
         List<User> response = new LinkedList<>();
         userRepository.findAll().forEach(response::add);
-
         return response;
     }
 
-    @RequestMapping(value = "/{username}",  method = RequestMethod.GET)
+    @RequestMapping(value = "/{username}", method = RequestMethod.GET)
     public User getUser(HttpServletRequest request, @PathVariable("username") String username) {
-
         Object requestAttribute = request.getAttribute("claims");
-        if((requestAttribute == null) || !(requestAttribute instanceof Claims)){
-            throw new RuntimeException("Did not receive required data from JWT token");
+        if (requestAttribute instanceof Claims) {
+            Claims claims = (Claims) requestAttribute;
+            String claimUsername = (String) claims.get("username");
+            if (claimUsername != null && !username.equalsIgnoreCase(claimUsername)) {
+                throw new AccessDeniedException("No access for requested entity");
+            }
         }
-
-        Claims claims = (Claims) requestAttribute;
-
-        if (!username.equalsIgnoreCase((String)claims.get("username"))) {
-            throw new AccessDeniedException("No access for requested entity");
-        }
-
         return userRepository.findOneByUsername(username);
     }
-
 }
