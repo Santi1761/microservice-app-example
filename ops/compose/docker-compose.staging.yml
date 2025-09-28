@@ -16,14 +16,16 @@ services:
 
   frontend:
     image: ${DOCKERHUB_USER}/frontend:${TAG}
-    env_file: ./.env
+    env_file:
+      - ./.env
     depends_on:
       - todos-api
     restart: unless-stopped
 
   users-api:
     image: ${DOCKERHUB_USER}/users-api:${TAG}
-    env_file: ./.env
+    env_file:
+      - ./.env
     environment:
       - SERVER_PORT=8083
     ports:
@@ -32,7 +34,8 @@ services:
 
   todos-api:
     image: ${DOCKERHUB_USER}/todos-api:${TAG}
-    env_file: ./.env
+    env_file:
+      - ./.env
     environment:
       - USERS_API_URL=http://users-api:8083
       - REDIS_URL=redis://redis:6379
@@ -44,28 +47,25 @@ services:
       - users-api
     restart: unless-stopped
 
-    auth-api:
-      image: ${DOCKERHUB_USER}/auth-api:${TAG}
-      env_file: ./.env
-      environment:
-        - AUTH_API_PORT=8081
-        - SERVER_PORT=8081
-        - PORT=8081
-        - JWT_SECRET=${JWT_SECRET}
-        - USERS_API_URL=http://users-api:8083
-        - USERS_SERVICE_URL=http://users-api:8083
-        - USERS_URL=http://users-api:8083
-        - USER_SERVICE_URL=http://users-api:8083
-        - USER_API_URL=http://users-api:8083
-      restart: unless-stopped
-      depends_on:
-        users-api:
-          condition: service_started
-
+  auth-api:
+    image: ${DOCKERHUB_USER}/auth-api:${TAG}
+    env_file:
+      - ./.env
+    environment:
+      - AUTH_API_PORT=8081
+      - SERVER_PORT=8081
+      - PORT=8081
+      - JWT_SECRET=${JWT_SECRET}
+      - USERS_API_URL=http://users-api:8083
+    depends_on:
+      - users-api
+    restart: unless-stopped
+    # OJO: sin healthcheck (la imagen distroless no tiene curl/wget/sh)
 
   log-message-processor:
     image: ${DOCKERHUB_USER}/log-message-processor:${TAG}
-    env_file: ./.env
+    env_file:
+      - ./.env
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
