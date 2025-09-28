@@ -4,17 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
+	"net/url"
+	"path"
+	"strings"
 
 	jwt "github.com/dgrijalva/jwt-go"
 )
-
-var allowedUserHashes = map[string]interface{}{
-	"admin_admin": nil,
-	"johnd_foo":   nil,
-	"janed_ddd":   nil,
-}
 
 type User struct {
 	Username  string `json:"username"`
@@ -33,55 +30,66 @@ type UserService struct {
 	AllowedUserHashes map[string]interface{}
 }
 
-func (h *UserService) Login(ctx context.Context, username, password string) (User, error) {
-	user, err := h.getUser(ctx, username)
+func (s *UserService) Login(ctx context.Context, username, password string) (User, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return User{}, ErrWrongCredentials
+	}
+
+	// Credenciales demo (user_pass)
+	if _, ok := s.AllowedUserHashes[fmt.Sprintf("%s_%s", username, password)]; !ok {
+		return User{}, ErrWrongCredentials
+	}
+
+	return s.getUser(ctx, username)
+}
+
+func (s *UserService) getUser(ctx context.Context, username string) (User, error) {
+	var user User
+
+	// Base desde env; si viene vacía, default al servicio docker
+	base := strings.TrimSpace(s.UserAPIAddress)
+	if base == "" {
+		base = "http://users-api:8083"
+	}
+	if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+		base = "http://" + base
+	}
+
+	u, err := url.Parse(base)
+	if err != nil {
+		return user, fmt.Errorf("invalid users api base: %w", err)
+	}
+	u.Path = path.Join(u.Path, "/users", url.PathEscape(username))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return user, err
 	}
 
-	userKey := fmt.Sprintf("%s_%s", username, password)
-
-	if _, ok := h.AllowedUserHashes[userKey]; !ok {
-		return user, ErrWrongCredentials // this is BAD, business logic layer must not return HTTP-specific errors
+	// Adjunta JWT para users-api (usa el mismo jwtSecret que lee de env JWT_SECRET)
+	if tok, err := s.getUserAPIToken(username); err == nil && tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 
+	resp, err := s.Client.Do(req)
+	if err != nil {
+		return user, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return user, fmt.Errorf("users-api %d: %s", resp.StatusCode, string(body))
+	}
+
+	if err := json.Unmarshal(body, &user); err != nil {
+		return user, err
+	}
 	return user, nil
 }
 
-func (h *UserService) getUser(ctx context.Context, username string) (User, error) {
-	var user User
-
-	token, err := h.getUserAPIToken(username)
-	if err != nil {
-		return user, err
-	}
-	url := fmt.Sprintf("%s/users/%s", h.UserAPIAddress, username)
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Add("Authorization", "Bearer "+token)
-
-	req = req.WithContext(ctx)
-
-	resp, err := h.Client.Do(req)
-	if err != nil {
-		return user, err
-	}
-
-	defer resp.Body.Close()
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return user, err
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return user, fmt.Errorf("could not get user data: %s", string(bodyBytes))
-	}
-
-	err = json.Unmarshal(bodyBytes, &user)
-
-	return user, err
-}
-
-func (h *UserService) getUserAPIToken(username string) (string, error) {
+func (s *UserService) getUserAPIToken(username string) (string, error) {
 	token := jwt.New(jwt.SigningMethodHS256)
 	claims := token.Claims.(jwt.MapClaims)
 	claims["username"] = username

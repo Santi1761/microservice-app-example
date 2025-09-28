@@ -44,22 +44,24 @@ services:
       - users-api
     restart: unless-stopped
 
-  auth-api:
-    image: ${DOCKERHUB_USER}/auth-api:${TAG}
-    env_file: ./.env
-    environment:
-      - AUTH_API_PORT=8081
-      - SERVER_PORT=8081
-      - PORT=8081
-      - JWT_SECRET=${JWT_SECRET}
-      - USERS_API_URL=http://users-api:8083
-      - USERS_SERVICE_URL=http://users-api:8083
-      - USERS_URL=http://users-api:8083
-      - USER_SERVICE_URL=http://users-api:8083
-      - USER_API_URL=http://users-api:8083
-    depends_on:
-      - users-api
-    restart: unless-stopped
+    auth-api:
+      image: ${DOCKERHUB_USER}/auth-api:${TAG}
+      env_file: ./.env
+      environment:
+        - AUTH_API_PORT=8081
+        - SERVER_PORT=8081
+        - PORT=8081
+        - JWT_SECRET=${JWT_SECRET}
+        - USERS_API_URL=http://users-api:8083
+        - USERS_SERVICE_URL=http://users-api:8083
+        - USERS_URL=http://users-api:8083
+        - USER_SERVICE_URL=http://users-api:8083
+        - USER_API_URL=http://users-api:8083
+      restart: unless-stopped
+      depends_on:
+        users-api:
+          condition: service_started
+
 
   log-message-processor:
     image: ${DOCKERHUB_USER}/log-message-processor:${TAG}
