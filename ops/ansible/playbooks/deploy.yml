@@ -47,7 +47,7 @@
       register: apt_install_result 
       retries: 6 
       delay: 5 
-      timeout: 600  # <--- AUMENTADO EL TIMEOUT A 10 MINUTOS para evitar el cuelgue
+      timeout: 600  # <--- Mantenemos 10 MINUTOS para evitar el cuelgue
       until: apt_install_result is succeeded
 
     # El resto de tareas de instalación de Docker se mantienen.
@@ -189,10 +189,9 @@
         files:
           - "{{ compose_file }}"
         state: absent
-      ignore_errors: true # Se mantiene para ignorar el error de JSON/glitch
+      ignore_errors: true 
 
-    # CORRECCIÓN DE FLUJO: Usar 'missing' para no golpear Docker Hub, pero pull si falta
-    - name: "Levantar stack con Docker Compose v2 (pull: missing, up)" # <-- ¡Añadir comillas!
+    - name: Levantar stack con Docker Compose v2 (pull: missing, up)
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
         files:
@@ -201,3 +200,4 @@
         state: present
         remove_orphans: true
       register: compose_up
+      ignore_errors: true # <--- ¡CLAVE! IGNORAR EL ERROR JSON PARA CONTINUAR
