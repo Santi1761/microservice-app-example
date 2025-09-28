@@ -39,94 +39,97 @@
       ignore_errors: true
     # ------------------------------------------------------------------
 
-    # ---------- Prerrequisitos Docker ----------
-    - name: Paquetes base (Corrección de Bloqueo)
-      ansible.builtin.shell: |
-        # Comando de instalación apt con fuerza y actualización
-        apt-get update -y && apt-get install -y --no-install-recommends ca-certificates curl gnupg python3
-      register: apt_install_result 
-      retries: 6 
-      delay: 5 
-      timeout: 200 
-      until: apt_install_result is succeeded
+    # ---------- Prerrequisitos Docker (COMENTADO PARA EVITAR CUELGUE DE APT) ----------
+    
+    # 🚫 TAREA COMENTADA: Ya asumimos que los paquetes base y Docker están instalados.
+    # - name: Paquetes base (Corrección de Bloqueo)
+    #   ansible.builtin.shell: |
+    #     apt-get update -y && apt-get install -y --no-install-recommends ca-certificates curl gnupg python3
+    #   register: apt_install_result 
+    #   retries: 6 
+    #   delay: 5 
+    #   timeout: 300
+    #   until: apt_install_result is succeeded
 
-    - name: Crear carpeta de keyrings
-      ansible.builtin.file:
-        path: /etc/apt/keyrings
-        state: directory
-        mode: '0755'
+    # 🚫 TAREAS COMENTADAS: Instalación de Docker 
+    # - name: Crear carpeta de keyrings
+    #   ansible.builtin.file:
+    #     path: /etc/apt/keyrings
+    #     state: directory
+    #     mode: '0755'
 
-    - name: Descargar llave GPG de Docker (ASCII)
-      ansible.builtin.get_url:
-        url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
-        dest: /etc/apt/keyrings/docker.asc
-        mode: '0644'
-        force: true
+    # - name: Descargar llave GPG de Docker (ASCII)
+    #   ansible.builtin.get_url:
+    #     url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
+    #     dest: /etc/apt/keyrings/docker.asc
+    #     mode: '0644'
+    #     force: true
 
-    - name: Convertir llave a formato gpg (dearmor)
-      ansible.builtin.command: >
-        gpg --dearmor -o /etc/apt/keyrings/docker.gpg /etc/apt/keyrings/docker.asc
-      args:
-        creates: /etc/apt/keyrings/docker.gpg
+    # - name: Convertir llave a formato gpg (dearmor)
+    #   ansible.builtin.command: >
+    #     gpg --dearmor -o /etc/apt/keyrings/docker.gpg /etc/apt/keyrings/docker.asc
+    #   args:
+    #     creates: /etc/apt/keyrings/docker.gpg
 
-    - name: Agregar repo de Docker (deb822)
-      ansible.builtin.deb822_repository:
-        name: docker
-        types: [deb]
-        uris: https://download.docker.com/linux/{{ ansible_distribution | lower }}
-        suites: "{{ ansible_distribution_release }}"
-        components: [stable]
-        signed_by: /etc/apt/keyrings/docker.gpg
-        state: present
+    # - name: Agregar repo de Docker (deb822)
+    #   ansible.builtin.deb822_repository:
+    #     name: docker
+    #     types: [deb]
+    #     uris: https://download.docker.com/linux/{{ ansible_distribution | lower }}
+    #     suites: "{{ ansible_distribution_release }}"
+    #     components: [stable]
+    #     signed_by: /etc/apt/keyrings/docker.gpg
+    #     state: present
 
-    # --------- Evitar cuelgues de APT y saltar update si ya hay Docker ----------
-    - name: Configurar timeouts/retries de APT (10s, 3 reintentos)
-      ansible.builtin.copy:
-        dest: /etc/apt/apt.conf.d/99ansible-timeouts
-        mode: '0644'
-        content: |
-          Acquire::http::Timeout "10";
-          Acquire::https::Timeout "10";
-          Acquire::ftp::Timeout "10";
-          Acquire::Retries "3";
-          Acquire::http::Pipeline-Depth "0";
+    # - name: Configurar timeouts/retries de APT (10s, 3 reintentos)
+    #   ansible.builtin.copy:
+    #     dest: /etc/apt/apt.conf.d/99ansible-timeouts
+    #     mode: '0644'
+    #     content: |
+    #       Acquire::http::Timeout "10";
+    #       Acquire::https::Timeout "10";
+    #       Acquire::ftp::Timeout "10";
+    #       Acquire::Retries "3";
+    #       Acquire::http::Pipeline-Depth "0";
 
-    - name: Obtener lista de paquetes instalados
-      ansible.builtin.package_facts:
-        manager: auto
+    # - name: Obtener lista de paquetes instalados
+    #   ansible.builtin.package_facts:
+    #     manager: auto
 
-    - name: Marcar si Docker ya está instalado
-      ansible.builtin.set_fact:
-        docker_installed: "{{ 'docker-ce' in (ansible_facts.packages | default({})) }}"
+    # - name: Marcar si Docker ya está instalado
+    #   ansible.builtin.set_fact:
+    #     docker_installed: "{{ 'docker-ce' in (ansible_facts.packages | default({})) }}"
 
-    - name: Actualizar cache APT (solo si Docker no está instalado)
-      ansible.builtin.apt:
-        update_cache: yes
-        force_apt_get: yes
-      when: not docker_installed
-      register: apt_update_result
-      retries: 3
-      delay: 5
-      until: apt_update_result is succeeded
+    # - name: Actualizar cache APT (solo si Docker no está instalado)
+    #   ansible.builtin.apt:
+    #     update_cache: yes
+    #     force_apt_get: yes
+    #   when: not docker_installed
+    #   register: apt_update_result
+    #   retries: 3
+    #   delay: 5
+    #   until: apt_update_result is succeeded
 
-    - name: Instalar Docker Engine, Buildx y Compose
-      ansible.builtin.apt:
-        name:
-          - docker-ce
-          - docker-ce-cli
-          - containerd.io
-          - docker-buildx-plugin
-          - docker-compose-plugin
-        state: present
-        force_apt_get: yes
+    # - name: Instalar Docker Engine, Buildx y Compose
+    #   ansible.builtin.apt:
+    #     name:
+    #       - docker-ce
+    #       - docker-ce-cli
+    #       - containerd.io
+    #       - docker-buildx-plugin
+    #       - docker-compose-plugin
+    #     state: present
+    #     force_apt_get: yes
 
-    - name: Agregar usuario al grupo docker
-      ansible.builtin.user:
-        name: "{{ deploy_user }}"
-        groups: docker
-        append: yes
+    # - name: Agregar usuario al grupo docker
+    #   ansible.builtin.user:
+    #     name: "{{ deploy_user }}"
+    #     groups: docker
+    #     append: yes
 
-    # ---------- Despliegue ----------
+    # ------------------------------------------------------------------
+
+    # ---------- Despliegue (Aquí es donde aplicamos la configuración) ----------
     - name: INFO | Host en grupos / paths seleccionados
       ansible.builtin.debug:
         msg: "group_names={{ group_names }} | app_dir={{ app_dir }} | compose={{ compose_file }}"
@@ -182,7 +185,7 @@
     # ********* CORRECCIÓN DE FLUJO DE DESPLIEGUE ***********************
     # *******************************************************************
 
-    - name: Detener y eliminar stack existente (para liberar imágenes antiguas)
+    - name: Detener y eliminar stack existente (para aplicar nuevo .env)
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
         files:
@@ -190,19 +193,20 @@
         state: absent
       ignore_errors: true # Puede que el stack no exista la primera vez
 
-    - name: Eliminar imagen antigua de users-api para forzar el pull
-      community.docker.docker_image:
-        name: "{{ lookup('env','DOCKERHUB_USER') }}/users-api"
-        tag: "{{ lookup('env','IMAGE_TAG') }}"
-        state: absent
-      ignore_errors: true # Si la imagen ya está libre o no existe, ignorar.
+    # 🚫 TAREA COMENTADA: Evitar el pull de imágenes y usar las que ya están
+    # - name: Eliminar imagen antigua de users-api para forzar el pull
+    #   community.docker.docker_image:
+    #     name: "{{ lookup('env','DOCKERHUB_USER') }}/users-api"
+    #     tag: "{{ lookup('env','IMAGE_TAG') }}"
+    #     state: absent
+    #   ignore_errors: true 
 
-    - name: Levantar stack con Docker Compose v2 (pull+up)
+    - name: Levantar stack con Docker Compose v2 (solo up, sin pull)
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
         files:
           - "{{ compose_file }}"
-        pull: always
+        pull: false # <-- Clave: No hacer pull
         state: present
         remove_orphans: true
       register: compose_up
