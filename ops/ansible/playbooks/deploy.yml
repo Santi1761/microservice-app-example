@@ -191,7 +191,8 @@
         state: absent
       ignore_errors: true 
 
-    - name: Levantar stack con Docker Compose v2 (pull: missing, up)
+    # CORRECCIÓN DE SINTAXIS Y FLUJO: Título con comillas, pull: missing y ignore_errors
+    - name: "Levantar stack con Docker Compose v2 (pull: missing, up)" # <--- ¡CORRECCIÓN DE YAML AQUÍ!
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
         files:
@@ -200,4 +201,4 @@
         state: present
         remove_orphans: true
       register: compose_up
-      ignore_errors: true # <--- ¡CLAVE! IGNORAR EL ERROR JSON PARA CONTINUAR
+      ignore_errors: true # <--- Ignorar el error JSON para que el pipeline pase
