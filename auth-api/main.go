@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	jwt "github.com/dgrijalva/jwt-go"
@@ -14,31 +17,162 @@ import (
 )
 
 var (
-	// ErrHttpGenericMessage that is returned in general case, details should be logged in such case
 	ErrHttpGenericMessage = echo.NewHTTPError(http.StatusInternalServerError, "something went wrong, please try again later")
-
-	// ErrWrongCredentials indicates that login attempt failed because of incorrect login or password
-	ErrWrongCredentials = echo.NewHTTPError(http.StatusUnauthorized, "username or password is invalid")
-
-	jwtSecret = "myfancysecret"
+	ErrWrongCredentials   = echo.NewHTTPError(http.StatusUnauthorized, "username or password is invalid")
+	jwtSecret             = "myfancysecret"
 )
 
-func main() {
-	port := os.Getenv("AUTH_API_PORT")
-    if len(port) == 0 {
-        port = "8081" 
-    }
-    hostport := ":" + port
-	userAPIAddress := os.Getenv("USERS_API_ADDRESS")
+// ====== helpers env ======
+func firstNonEmpty(keys ...string) string {
+	for _, k := range keys {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+func normalizeBase(u string, def string) string {
+	base := strings.TrimSpace(u)
+	if base == "" {
+		base = def
+	}
+	// si viene "host:puerto", añade esquema
+	if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+		base = "http://" + base
+	}
+	base = strings.TrimRight(base, "/")
+	return base
+}
 
-	envJwtSecret := os.Getenv("JWT_SECRET")
-	if len(envJwtSecret) != 0 {
-		jwtSecret = envJwtSecret
+// ====== breaker simple ======
+type brkState int
+
+const (
+	closed brkState = iota
+	open
+	halfOpen
+)
+
+type breaker struct {
+	mu            sync.Mutex
+	state         brkState
+	failures      int
+	lastChanged   time.Time
+	maxFailures   int
+	openInterval  time.Duration
+	halfOpenLimit int
+	halfCalls     int
+}
+
+func newBreaker(maxFailures int, openInterval time.Duration, halfOpenLimit int) *breaker {
+	return &breaker{
+		state:         closed,
+		maxFailures:   maxFailures,
+		openInterval:  openInterval,
+		halfOpenLimit: halfOpenLimit,
+		lastChanged:   time.Now(),
+	}
+}
+func (b *breaker) allow() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	switch b.state {
+	case closed:
+		return true
+	case open:
+		if time.Since(b.lastChanged) >= b.openInterval {
+			b.state = halfOpen
+			b.halfCalls = 0
+			return true
+		}
+		return false
+	case halfOpen:
+		if b.halfCalls < b.halfOpenLimit {
+			b.halfCalls++
+			return true
+		}
+		return false
+	default:
+		return true
+	}
+}
+func (b *breaker) success() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.state == halfOpen {
+		b.state = closed
+		b.failures = 0
+		b.lastChanged = time.Now()
+	} else if b.state == closed {
+		b.failures = 0
+	}
+}
+func (b *breaker) failure() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	switch b.state {
+	case closed:
+		b.failures++
+		if b.failures >= b.maxFailures {
+			b.state = open
+			b.lastChanged = time.Now()
+		}
+	case halfOpen:
+		b.state = open
+		b.lastChanged = time.Now()
+	}
+}
+
+// ====== tipos existentes ======
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type UserService struct {
+	Client            *http.Client
+	UserAPIAddress    string
+	AllowedUserHashes map[string]interface{}
+}
+
+// Login se asume ya implementado en tu proyecto (usa UserAPIAddress)
+
+// ====== main echo ======
+func main() {
+	// puerto
+	port := os.Getenv("AUTH_API_PORT")
+	if port == "" {
+		port = "8081"
+	}
+	hostport := ":" + port
+
+	// secret
+	if v := strings.TrimSpace(os.Getenv("JWT_SECRET")); v != "" {
+		jwtSecret = v
+	}
+
+	// base de users-api (acepta muchos alias)
+	rawBase := firstNonEmpty(
+		"USERS_API_URL",
+		"USERS_SERVICE_URL",
+		"USER_SERVICE_URL",
+		"USER_API_URL",
+		"USERS_URL",
+		"USER_API_ADDR",
+		"USERS_SERVICE_ADDR",
+		"USERS_SERVICE_HOST",
+		"USERS_API_ADDRESS", // tu var original
+	)
+	userAPIBase := normalizeBase(rawBase, "http://users-api:8083")
+
+	// Validar URL
+	if _, err := url.ParseRequestURI(userAPIBase); err != nil {
+		log.Fatalf("invalid USERS API base URL: %q (%v)", userAPIBase, err)
 	}
 
 	userService := UserService{
 		Client:         http.DefaultClient,
-		UserAPIAddress: userAPIAddress,
+		UserAPIAddress: userAPIBase,
 		AllowedUserHashes: map[string]interface{}{
 			"admin_admin": nil,
 			"johnd_foo":   nil,
@@ -49,9 +183,9 @@ func main() {
 	e := echo.New()
 	e.Logger.SetLevel(gommonlog.INFO)
 
-	if zipkinURL := os.Getenv("ZIPKIN_URL"); len(zipkinURL) != 0 {
+	// Zipkin (si tienes initTracing en tu repo, se mantiene)
+	if zipkinURL := os.Getenv("ZIPKIN_URL"); zipkinURL != "" {
 		e.Logger.Infof("init tracing to Zipkit at %s", zipkinURL)
-
 		if tracedMiddleware, tracedClient, err := initTracing(zipkinURL); err == nil {
 			e.Use(echo.WrapMiddleware(tracedMiddleware))
 			userService.Client = tracedClient
@@ -66,62 +200,118 @@ func main() {
 	e.Use(middleware.Recover())
 	e.Use(middleware.CORS())
 
-	// Route => handler
-	e.GET("/version", func(c echo.Context) error {
-		return c.String(http.StatusOK, "Auth API, written in Go\n")
-	})
+	// health
+	e.GET("/healthz", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
+	e.GET("/version", func(c echo.Context) error { return c.String(http.StatusOK, "Auth API, written in Go\n") })
 
-	e.POST("/login", getLoginHandler(userService))
+	// breaker (parametrizable por env simples)
+	brk := newBreaker(
+		envInt("CB_MAX_FAILURES", 3),
+		envDurMs("CB_OPEN_MS", 10000),
+		envInt("CB_HALF_OPEN_LIMIT", 2),
+	)
 
-	// Start server
+	e.POST("/login", getLoginHandler(userService, brk))
+
+	e.Logger.Infof("auth-api on %s; USERS_API=%s", hostport, userAPIBase)
 	e.Logger.Fatal(e.Start(hostport))
 }
 
-type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
+func getLoginHandler(userService UserService, brk *breaker) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		if c.Request().Method == http.MethodOptions {
+			return c.NoContent(http.StatusNoContent)
+		}
 
-func getLoginHandler(userService UserService) echo.HandlerFunc {
-	f := func(c echo.Context) error {
-		requestData := LoginRequest{}
-		decoder := json.NewDecoder(c.Request().Body)
-		if err := decoder.Decode(&requestData); err != nil {
-			log.Printf("could not read credentials from POST body: %s", err.Error())
+		if !brk.allow() {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "auth service temporarily unavailable")
+		}
+
+		req := LoginRequest{}
+		if err := json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
+			brk.failure()
 			return ErrHttpGenericMessage
 		}
 
 		ctx := c.Request().Context()
-		user, err := userService.Login(ctx, requestData.Username, requestData.Password)
+		user, err := userService.Login(ctx, strings.TrimSpace(req.Username), req.Password)
 		if err != nil {
 			if err != ErrWrongCredentials {
-				log.Printf("could not authorize user '%s': %s", requestData.Username, err.Error())
+				brk.failure()
+				log.Printf("could not authorize user '%s': %v", req.Username, err)
 				return ErrHttpGenericMessage
 			}
-
+			// credenciales malas NO abren el breaker
 			return ErrWrongCredentials
 		}
-		token := jwt.New(jwt.SigningMethodHS256)
+		brk.success()
 
-		// Set claims
+		// JWT HS256
+		token := jwt.New(jwt.SigningMethodHS256)
 		claims := token.Claims.(jwt.MapClaims)
 		claims["username"] = user.Username
 		claims["firstname"] = user.FirstName
 		claims["lastname"] = user.LastName
 		claims["role"] = user.Role
-		claims["exp"] = time.Now().Add(time.Hour * 72).Unix()
+		claims["exp"] = time.Now().Add(72 * time.Hour).Unix()
 
-		// Generate encoded token and send it as response.
 		t, err := token.SignedString([]byte(jwtSecret))
 		if err != nil {
-			log.Printf("could not generate a JWT token: %s", err.Error())
 			return ErrHttpGenericMessage
 		}
 
+		// Devolvemos ambas claves por conveniencia
 		return c.JSON(http.StatusOK, map[string]string{
 			"accessToken": t,
+			"token":       t,
 		})
 	}
-
-	return echo.HandlerFunc(f)
 }
+
+// ====== env parsers para breaker ======
+func envInt(key string, def int) int {
+	if s := strings.TrimSpace(os.Getenv(key)); s != "" {
+		var n int
+		_, err := fmtSscan(s, &n)
+		if err == nil && n >= 0 {
+			return n
+		}
+	}
+	return def
+}
+
+func envDurMs(key string, defMs int) time.Duration {
+	if s := strings.TrimSpace(os.Getenv(key)); s != "" {
+		var n int
+		_, err := fmtSscan(s, &n)
+		if err == nil && n >= 0 {
+			return time.Duration(n) * time.Millisecond
+		}
+	}
+	return time.Duration(defMs) * time.Millisecond
+}
+
+// mini fmt.Sscan sin importar fmt entero
+func fmtSscan(s string, p *int) (int, error) {
+	sign := 1
+	i := 0
+	if len(s) > 0 && (s[0] == '-' || s[0] == '+') {
+		if s[0] == '-' {
+			sign = -1
+		}
+		i++
+	}
+	n := 0
+	for ; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, &numErr{s}
+		}
+		n = n*10 + int(s[i]-'0')
+	}
+	*p = sign * n
+	return 1, nil
+}
+
+type numErr struct{ s string }
+
+func (e *numErr) Error() string { return "invalid number: " + e.s }
