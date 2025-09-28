@@ -41,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve IMAGE_TAG
+      - name: Resolve desired IMAGE_TAG
         id: tag
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -53,7 +53,41 @@ jobs:
           else
             echo "IMAGE_TAG=dev-${GITHUB_SHA}" >> $GITHUB_ENV
           fi
-          echo "Using IMAGE_TAG=${IMAGE_TAG}"
+          echo "Using desired IMAGE_TAG=${IMAGE_TAG}"
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Decide FINAL_TAG (fallback to latest if any image missing)
+        id: decide
+        env:
+          USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -e
+          SERVICES="frontend users-api todos-api auth-api log-message-processor"
+          MISSING=""
+          for SVC in $SERVICES; do
+            if ! docker manifest inspect "${USER}/${SVC}:${IMAGE_TAG}" >/dev/null 2>&1; then
+              echo "Missing ${USER}/${SVC}:${IMAGE_TAG}"
+              MISSING="yes"
+            else
+              echo "Found ${USER}/${SVC}:${IMAGE_TAG}"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "FINAL_TAG=latest" >> $GITHUB_ENV
+            {
+              echo "### Image fallback"
+              echo ""
+              echo "Some images with tag \`${IMAGE_TAG}\` were missing. Falling back to \`latest\` for all services."
+            } >> $GITHUB_STEP_SUMMARY
+          else
+            echo "FINAL_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+          fi
+          echo "FINAL_TAG=${FINAL_TAG:-latest}"
 
       - name: Install Ansible and dependencies
         run: |
@@ -91,7 +125,7 @@ jobs:
           ANSIBLE_HOST_KEY_CHECKING: "False"
           ANSIBLE_STDOUT_CALLBACK: "yaml"
           DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          IMAGE_TAG: ${{ env.FINAL_TAG }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
         run: |
           ansible-playbook -vv -i ops/ansible/inventory/hosts.ini ops/ansible/playbooks/deploy.yml -l staging
