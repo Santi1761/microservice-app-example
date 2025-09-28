@@ -1,5 +1,5 @@
 ---
-- name: Deploy microservice-app (auto: staging/prod)
+- name: "Deploy microservice-app (auto: staging/prod)"
   hosts: all
   become: true
   environment:
@@ -12,7 +12,7 @@
     compose_src_dir: "{{ playbook_dir }}/../../compose"
 
   tasks:
-    # ---- APT lock waiters (no borramos locks a lo loco) ----
+    # ---- Espera por locks APT sin borrar archivos ----
     - name: Wait for APT/dpkg locks if in use
       ansible.builtin.shell: |
         set -e
@@ -20,7 +20,7 @@
         while fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 3; done
       changed_when: false
 
-    # ---- Docker prerequisites ----
+    # ---- Prerrequisitos Docker ----
     - name: Base packages
       ansible.builtin.apt:
         name: [ca-certificates, curl, gnupg, python3]
@@ -102,7 +102,7 @@
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
 
-    # ---- Secrets and env ----
+    # ---- Secrets y .env ----
     - name: Capture JWT_SECRET from runner env
       ansible.builtin.set_fact:
         jwt_secret_from_env: "{{ lookup('env','JWT_SECRET') | default('', true) }}"
@@ -141,7 +141,7 @@
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
 
-    # ---- Compose deploy (down/up) ----
+    # ---- Compose deploy ----
     - name: Tear down existing stack (ignore if first time)
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
