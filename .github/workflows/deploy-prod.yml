@@ -7,7 +7,7 @@ on:
       image_tag:
         description: "Image tag a desplegar (p. ej. dev-<sha> o latest)"
         required: false
-        default: 'latest' # Added a default for clarity
+        default: 'latest'
         type: string
 
   # Dispara SÓLO en un push a la rama 'master' (asumimos que es un merge/PR aprobado)
@@ -32,7 +32,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: production # Usa el entorno de GitHub para gestionar secretos y restricciones
+    environment: production
 
     steps:
       - uses: actions/checkout@v4
@@ -73,12 +73,12 @@ jobs:
           for SVC in $SERVICES; do
             IMAGE_REF="${USER}/${SVC}:${IMAGE_TAG}"
             if ! docker manifest inspect "${IMAGE_REF}" >/dev/null 2>&1; then
-              echo " ERROR: Falta la imagen ${IMAGE_REF}. Cancelando despliegue de Prod."
-              echo "-  Falta la imagen \`${IMAGE_REF}\`" >> $GITHUB_STEP_SUMMARY
+              echo "ERROR: Falta la imagen ${IMAGE_REF}. Cancelando despliegue de Prod."
+              echo "- Falta la imagen \`${IMAGE_REF}\`" >> $GITHUB_STEP_SUMMARY
               MISSING=1
             else
-              echo " OK: ${IMAGE_REF}"
-              echo "-  \`${IMAGE_REF}\` existe" >> $GITHUB_STEP_SUMMARY
+              echo "OK: ${IMAGE_REF}"
+              echo "- \`${IMAGE_REF}\` existe" >> $GITHUB_STEP_SUMMARY
             fi
           done
 
@@ -143,7 +143,7 @@ jobs:
 
             # Test 1: Frontend (Nginx) y Users-API
             curl -sf http://localhost/ > /dev/null && echo "1/4 Frontend (Nginx) OK"
-            curl -sf http://localhost/users/johnd > /dev/null && echo  2/4 Users API OK"
+            curl -sf http://localhost/users/johnd > /dev/null && echo "2/4 Users API OK"
 
             # Test 2: Login y obtención de token (Probando Auth-API)
             echo "--- 3/4 Probando Auth-API y sincronización JWT ---"
@@ -160,18 +160,18 @@ jobs:
             )
             
             if [ -z "$TOKEN" ]; then
-              echo " 3/4 Fallo al obtener el Token. Problema de Auth-API."
+              echo "3/4 Fallo al obtener el Token. Problema de Auth-API."
               exit 1
             else
-              echo " 3/4 Token Obtenido. Auth-API OK."
+              echo "3/4 Token Obtenido. Auth-API OK."
             fi
 
             # Test 3: Todos-API autenticado (Probando validación JWT en Todos-API)
             echo "--- 4/4 Probando Todos-API (Validación JWT) ---"
             if curl -sf -H "Authorization: Bearer $TOKEN" http://localhost/todos > /dev/null; then
-              echo " 4/4 Todos API (Auth) OK. Sincronización JWT exitosa."
+              echo "4/4 Todos API (Auth) OK. Sincronización JWT exitosa."
             else
-              echo " 4/4 Fallo al acceder a Todos-API con el Token. Clave JWT asíncrona."
+              echo "4/4 Fallo al acceder a Todos-API con el Token. Clave JWT asíncrona."
               exit 1
             fi
 
