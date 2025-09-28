@@ -192,12 +192,12 @@
       ignore_errors: true # Se mantiene para ignorar el error de JSON/glitch
 
     # CORRECCIÓN DE FLUJO: Usar 'missing' para no golpear Docker Hub, pero pull si falta
-    - name: Levantar stack con Docker Compose v2 (pull: missing, up)
+    - name: "Levantar stack con Docker Compose v2 (pull: missing, up)" # <-- ¡Añadir comillas!
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
         files:
           - "{{ compose_file }}"
-        pull: missing # <-- CORRECCIÓN: Hace pull solo si la imagen no está (evita límite Docker Hub)
+        pull: missing 
         state: present
         remove_orphans: true
       register: compose_up
