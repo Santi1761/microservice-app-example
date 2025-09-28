@@ -206,7 +206,7 @@
         project_src: "{{ app_dir }}"
         files:
           - "{{ compose_file }}"
-        pull: false # <-- Clave: No hacer pull
+        pull: never # <-- Clave: No hacer pull
         state: present
         remove_orphans: true
       register: compose_up
