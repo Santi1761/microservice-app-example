@@ -1,8 +1,8 @@
-# Builder Node 8 desde GHCR (EOL pero disponible como mirror library)
-FROM ghcr.io/library/node:8.17.0 AS build
+# Builder Node 8 (EOL) desde el mirror de Google
+FROM mirror.gcr.io/library/node:8.17.0 AS build
 WORKDIR /app
 
-# Fix repos stretch para poder instalar toolchain (como ya tenías)
+# Fix repos stretch como ya tenías
 RUN set -eux; \
     sed -i -e 's/deb.debian.org/archive.debian.org/g' \
     -e 's|security.debian.org|archive.debian.org|g' \
@@ -19,7 +19,7 @@ RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; \
 COPY . .
 RUN npm run build
 
-# Runtime Nginx desde GHCR
-FROM ghcr.io/library/nginx:alpine
+# Runtime Nginx desde el mirror de Google
+FROM mirror.gcr.io/library/nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
