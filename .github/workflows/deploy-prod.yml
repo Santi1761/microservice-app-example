@@ -73,11 +73,11 @@ jobs:
           for SVC in $SERVICES; do
             IMAGE_REF="${USER}/${SVC}:${IMAGE_TAG}"
             if ! docker manifest inspect "${IMAGE_REF}" >/dev/null 2>&1; then
-              echo " ERROR: Falta la imagen ${IMAGE_REF}. Cancelando despliegue de Prod."
+              echo "ERROR: Falta la imagen ${IMAGE_REF}. Cancelando despliegue de Prod."
               echo "- Falta la imagen \`${IMAGE_REF}\`" >> $GITHUB_STEP_SUMMARY
               MISSING=1
             else
-              echo " OK: ${IMAGE_REF}"
+              echo "OK: ${IMAGE_REF}"
               echo "- \`${IMAGE_REF}\` existe" >> $GITHUB_STEP_SUMMARY
             fi
           done
