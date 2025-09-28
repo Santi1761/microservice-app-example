@@ -1,46 +1,107 @@
 name: deploy-prod
 
 on:
+  # Permite ejecutar el pipeline manualmente (useful for rollbacks or emergency deployments)
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag a desplegar (p. ej. dev-<sha> o latest)"
+        required: false
+        default: 'latest' # Added a default for clarity
+        type: string
+
+  # Dispara SÓLO en un push a la rama 'master' (asumimos que es un merge/PR aprobado)
   push:
-    branches: [ main ]
+    branches: [ master ]
+    # Limita qué archivos disparan el despliegue (optimización)
     paths:
       - 'ops/**'
       - '.github/workflows/deploy-prod.yml'
+      # Si se fusionan artefactos (no recomendado, pero se mantiene la compatibilidad)
       - 'frontend/**'
       - 'users-api/**'
       - 'auth-api/**'
       - 'todos-api/**'
       - 'log-message-processor/**'
 
+concurrency:
+  group: deploy-prod-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production
+    timeout-minutes: 30
+    environment: production # Usa el entorno de GitHub para gestionar secretos y restricciones
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Instalar Ansible y colección Docker
+      # 1) Resolver el tag que queremos desplegar
+      - name: Resolver IMAGE_TAG deseado
+        id: tag
+        run: |
+          # Prioridad 1: Input manual (workflow_dispatch)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.image_tag }}" ]; then
+            IMAGE_TAG_FINAL="${{ inputs.image_tag }}"
+          else
+            # Prioridad 2: Push a master (resultado de PR), por convención desplegamos 'latest'
+            IMAGE_TAG_FINAL="latest"
+          fi
+          echo "IMAGE_TAG=${IMAGE_TAG_FINAL}" >> $GITHUB_ENV
+          echo "Usando IMAGE_TAG=${IMAGE_TAG_FINAL}"
+
+      # 2) Login a Docker Hub (Necesario para 'docker manifest inspect' y para que la VM haga 'docker pull')
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }} # Usar un token de acceso personal de Docker Hub
+
+      # 3) Validar que TODAS las imágenes existen para ese tag (Verificación de integridad en Prod)
+      - name: Validar imágenes (fail si falta alguna)
+        env:
+          USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -e
+          SERVICES="frontend users-api todos-api auth-api log-message-processor"
+          MISSING=0
+          
+          echo "### Validación de imágenes (${{ env.IMAGE_TAG }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          for SVC in $SERVICES; do
+            IMAGE_REF="${USER}/${SVC}:${IMAGE_TAG}"
+            if ! docker manifest inspect "${IMAGE_REF}" >/dev/null 2>&1; then
+              echo " ERROR: Falta la imagen ${IMAGE_REF}. Cancelando despliegue de Prod."
+              echo "-  Falta la imagen \`${IMAGE_REF}\`" >> $GITHUB_STEP_SUMMARY
+              MISSING=1
+            else
+              echo " OK: ${IMAGE_REF}"
+              echo "-  \`${IMAGE_REF}\` existe" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+          if [ "$MISSING" -eq 1 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "El despliegue de producción se cancela. Revise el pipeline de Build/Test." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      # 4) Instalar Ansible + colección Docker
+      - name: Instalar Ansible y dependencias
         run: |
           python -m pip install --upgrade pip
           pip install ansible ansible-lint
           ansible-galaxy collection install community.docker
 
-      - name: Agregar clave SSH (ENV prod)
+      # 5) SSH a la VM de producción
+      - name: Agregar clave SSH (prod)
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Preflight TCP 22 (prod)
-        shell: bash
-        run: |
-          set -e
-          echo "Probe puerto 22..."
-          timeout 8 bash -lc 'echo > /dev/tcp/${{ secrets.SSH_HOST }}/22' \
-            && echo "OK puerto 22" || (echo "Fallo puerto 22"; exit 1)
-
-      - name: Comprobar conectividad (appleboy)
+      - name: Comprobar conectividad SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -50,14 +111,79 @@ jobs:
           timeout: 60s
           command_timeout: 10s
           script_stop: true
-          script: echo ok
+          script: echo "Conexión SSH a Prod exitosa"
 
+      # 6) Despliegue con Ansible (usa ops/ansible/playbooks/deploy.yml)
       - name: Despliegue con Ansible (prod)
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
           ANSIBLE_STDOUT_CALLBACK: "yaml"
           DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          IMAGE_TAG: latest
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }} # Clave crucial
         run: |
           ansible-playbook -vv -i ops/ansible/inventory/hosts.ini ops/ansible/playbooks/deploy.yml -l prod
+
+      # 7) Smoke tests post-deploy (en la VM)
+      - name: Smoke tests (Verificación de Servicios)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          timeout: 120s
+          script_stop: true
+          script: |
+            set -e
+            APP_DIR="/opt/microservice-app" # Directorio de producción
+            
+            echo "--- Estado de los contenedores ---"
+            docker compose -f "${APP_DIR}/docker-compose.prod.yml" ps
+
+            # Test 1: Frontend (Nginx) y Users-API
+            curl -sf http://localhost/ > /dev/null && echo "1/4 Frontend (Nginx) OK"
+            curl -sf http://localhost/users/johnd > /dev/null && echo  2/4 Users API OK"
+
+            # Test 2: Login y obtención de token (Probando Auth-API)
+            echo "--- 3/4 Probando Auth-API y sincronización JWT ---"
+            TOKEN=$(
+              curl -s -X POST 'http://localhost/login' \
+                -H 'Content-Type: application/json' \
+                -d '{"username":"johnd","password":"foo"}' \
+              | python3 -c 'import sys,json; 
+                try: 
+                  data=json.load(sys.stdin); 
+                  print(data.get("accessToken") or data.get("token") or "") 
+                except: 
+                  pass'
+            )
+            
+            if [ -z "$TOKEN" ]; then
+              echo " 3/4 Fallo al obtener el Token. Problema de Auth-API."
+              exit 1
+            else
+              echo " 3/4 Token Obtenido. Auth-API OK."
+            fi
+
+            # Test 3: Todos-API autenticado (Probando validación JWT en Todos-API)
+            echo "--- 4/4 Probando Todos-API (Validación JWT) ---"
+            if curl -sf -H "Authorization: Bearer $TOKEN" http://localhost/todos > /dev/null; then
+              echo " 4/4 Todos API (Auth) OK. Sincronización JWT exitosa."
+            else
+              echo " 4/4 Fallo al acceder a Todos-API con el Token. Clave JWT asíncrona."
+              exit 1
+            fi
+
+      - name: Resumen del Despliegue
+        if: always()
+        run: |
+          {
+            echo "### Despliegue a Producción Finalizado"
+            echo ""
+            echo "- Tag desplegado: \`${{ env.IMAGE_TAG }}\`"
+            echo "- Host de Producción: \`${{ secrets.SSH_HOST }}\`"
+            echo "- Directorio remoto: \`/opt/microservice-app\`"
+            echo ""
+            echo "Puede verificar la aplicación en la IP pública de Prod."
+          } >> $GITHUB_STEP_SUMMARY
