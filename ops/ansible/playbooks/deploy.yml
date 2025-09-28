@@ -47,6 +47,7 @@
       register: apt_install_result 
       retries: 6 
       delay: 5 
+      timeout: 200 
       until: apt_install_result is succeeded
 
     - name: Crear carpeta de keyrings
