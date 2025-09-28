@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -123,21 +124,14 @@ func (b *breaker) failure() {
 	}
 }
 
-// ====== tipos existentes ======
+// ====== tipos de tu proyecto ======
+// NOTA: NO redefinimos UserService aquí. Ya existe en user.go (mismo package).
+
 type LoginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
-type UserService struct {
-	Client            *http.Client
-	UserAPIAddress    string
-	AllowedUserHashes map[string]interface{}
-}
-
-// Login se asume ya implementado en tu proyecto (usa UserAPIAddress)
-
-// ====== main echo ======
 func main() {
 	// puerto
 	port := os.Getenv("AUTH_API_PORT")
@@ -161,7 +155,7 @@ func main() {
 		"USER_API_ADDR",
 		"USERS_SERVICE_ADDR",
 		"USERS_SERVICE_HOST",
-		"USERS_API_ADDRESS", // tu var original
+		"USERS_API_ADDRESS", // compatibilidad con tu main.go original
 	)
 	userAPIBase := normalizeBase(rawBase, "http://users-api:8083")
 
@@ -170,6 +164,7 @@ func main() {
 		log.Fatalf("invalid USERS API base URL: %q (%v)", userAPIBase, err)
 	}
 
+	// UserService es el que ya tienes en user.go
 	userService := UserService{
 		Client:         http.DefaultClient,
 		UserAPIAddress: userAPIBase,
@@ -183,12 +178,17 @@ func main() {
 	e := echo.New()
 	e.Logger.SetLevel(gommonlog.INFO)
 
-	// Zipkin (si tienes initTracing en tu repo, se mantiene)
+	// Zipkin (si tienes initTracing en tu repo)
 	if zipkinURL := os.Getenv("ZIPKIN_URL"); zipkinURL != "" {
 		e.Logger.Infof("init tracing to Zipkit at %s", zipkinURL)
-		if tracedMiddleware, tracedClient, err := initTracing(zipkinURL); err == nil {
+		if tracedMiddleware, tc, err := initTracing(zipkinURL); err == nil {
 			e.Use(echo.WrapMiddleware(tracedMiddleware))
-			userService.Client = tracedClient
+			// Solo si el client retornado es *http.Client lo usamos; si no, seguimos con DefaultClient
+			if c, ok := any(tc).(*http.Client); ok && c != nil {
+				userService.Client = c
+			} else {
+				e.Logger.Infof("zipkin client is not *http.Client; keeping default transport")
+			}
 		} else {
 			e.Logger.Infof("Zipkin tracer init failed: %s", err.Error())
 		}
@@ -204,7 +204,7 @@ func main() {
 	e.GET("/healthz", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
 	e.GET("/version", func(c echo.Context) error { return c.String(http.StatusOK, "Auth API, written in Go\n") })
 
-	// breaker (parametrizable por env simples)
+	// breaker (parametrizable)
 	brk := newBreaker(
 		envInt("CB_MAX_FAILURES", 3),
 		envDurMs("CB_OPEN_MS", 10000),
@@ -270,48 +270,25 @@ func getLoginHandler(userService UserService, brk *breaker) echo.HandlerFunc {
 
 // ====== env parsers para breaker ======
 func envInt(key string, def int) int {
-	if s := strings.TrimSpace(os.Getenv(key)); s != "" {
-		var n int
-		_, err := fmtSscan(s, &n)
-		if err == nil && n >= 0 {
-			return n
-		}
+	s := strings.TrimSpace(os.Getenv(key))
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err == nil && n >= 0 {
+		return n
 	}
 	return def
 }
 
 func envDurMs(key string, defMs int) time.Duration {
-	if s := strings.TrimSpace(os.Getenv(key)); s != "" {
-		var n int
-		_, err := fmtSscan(s, &n)
-		if err == nil && n >= 0 {
-			return time.Duration(n) * time.Millisecond
-		}
+	s := strings.TrimSpace(os.Getenv(key))
+	if s == "" {
+		return time.Duration(defMs) * time.Millisecond
+	}
+	n, err := strconv.Atoi(s)
+	if err == nil && n >= 0 {
+		return time.Duration(n) * time.Millisecond
 	}
 	return time.Duration(defMs) * time.Millisecond
 }
-
-// mini fmt.Sscan sin importar fmt entero
-func fmtSscan(s string, p *int) (int, error) {
-	sign := 1
-	i := 0
-	if len(s) > 0 && (s[0] == '-' || s[0] == '+') {
-		if s[0] == '-' {
-			sign = -1
-		}
-		i++
-	}
-	n := 0
-	for ; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return 0, &numErr{s}
-		}
-		n = n*10 + int(s[i]-'0')
-	}
-	*p = sign * n
-	return 1, nil
-}
-
-type numErr struct{ s string }
-
-func (e *numErr) Error() string { return "invalid number: " + e.s }
