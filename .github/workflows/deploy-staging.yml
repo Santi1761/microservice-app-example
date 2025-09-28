@@ -2,6 +2,11 @@ name: deploy-staging
 
 on:
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (e.g., dev-<sha> or latest)"
+        required: false
+        type: string
   pull_request:
     branches: [ develop ]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -24,6 +29,10 @@ on:
       - 'todos-api/**'
       - 'log-message-processor/**'
 
+concurrency:
+  group: deploy-staging-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -32,13 +41,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Instalar Ansible y colección Docker
+      - name: Resolve IMAGE_TAG
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ -n "${{ inputs.image_tag }}" ]; then
+              echo "IMAGE_TAG=${{ inputs.image_tag }}" >> $GITHUB_ENV
+            else
+              echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+            fi
+          else
+            echo "IMAGE_TAG=dev-${GITHUB_SHA}" >> $GITHUB_ENV
+          fi
+          echo "Using IMAGE_TAG=${IMAGE_TAG}"
+
+      - name: Install Ansible and dependencies
         run: |
           python -m pip install --upgrade pip
           pip install ansible ansible-lint
           ansible-galaxy collection install community.docker
 
-      - name: Agregar clave SSH (ENV staging)
+      - name: Add SSH key (staging)
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -47,11 +70,11 @@ jobs:
         shell: bash
         run: |
           set -e
-          echo "Probe puerto 22..."
+          echo "Probing port 22..."
           timeout 8 bash -lc 'echo > /dev/tcp/${{ secrets.SSH_HOST }}/22' \
-            && echo "OK puerto 22" || (echo "Fallo puerto 22"; exit 1)
+            && echo "OK port 22" || (echo "Port 22 unreachable"; exit 1)
 
-      - name: Comprobar conectividad (appleboy)
+      - name: Connectivity check (appleboy)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -63,12 +86,12 @@ jobs:
           script_stop: true
           script: echo ok
 
-      - name: Despliegue con Ansible (staging)
+      - name: Deploy with Ansible (staging)
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
           ANSIBLE_STDOUT_CALLBACK: "yaml"
           DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          IMAGE_TAG: dev-cf4514b4636c4fc5f7bc2578382ca1658ebdc642
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
         run: |
           ansible-playbook -vv -i ops/ansible/inventory/hosts.ini ops/ansible/playbooks/deploy.yml -l staging

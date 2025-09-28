@@ -23,11 +23,11 @@ services:
 
   users-api:
     image: ${DOCKERHUB_USER}/users-api:${TAG}
-    env_file: ./.env  <-- Esto inyecta las variables de env.j2
+    env_file: ./.env
     environment:
-    - SERVER_PORT=8083  
+      - SERVER_PORT=8083
     ports:
-    - "8083:8083"
+      - "8083:8083"
     restart: unless-stopped
 
   todos-api:
@@ -50,30 +50,24 @@ services:
     environment:
       - AUTH_API_PORT=8081
       - SERVER_PORT=8081
-      - PORT=8081            
+      - PORT=8081
       - JWT_SECRET=${JWT_SECRET}
       - USERS_API_URL=http://users-api:8083
       - USERS_SERVICE_URL=http://users-api:8083
       - USERS_URL=http://users-api:8083
       - USER_SERVICE_URL=http://users-api:8083
       - USER_API_URL=http://users-api:8083
-    restart: unless-stopped
-    healthcheck: 
-      test: ["CMD", "curl", "-f", "http://localhost:8081/"] 
-      interval: 3s
-      timeout: 5s
-      retries: 50
     depends_on:
-      users-api:
-        condition: service_started
-  
+      - users-api
+    restart: unless-stopped
+
   log-message-processor:
     image: ${DOCKERHUB_USER}/log-message-processor:${TAG}
     env_file: ./.env
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_CHANNEL=log_channel 
+      - REDIS_CHANNEL=log_channel
     depends_on:
       - redis
     restart: unless-stopped
