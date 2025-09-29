@@ -4,7 +4,7 @@ services:
   nginx:
     image: nginx:alpine
     ports:
-      - "${NGINX_HTTP_PORT}:80"        # antes 8080:80
+      - "8080:80"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
@@ -29,7 +29,7 @@ services:
     environment:
       - SERVER_PORT=8083
     ports:
-      - "${USERS_API_PORT}:8083"       # antes 8083:8083
+      - "8083:8083"
     restart: unless-stopped
 
   todos-api:
@@ -41,7 +41,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - PORT=8082
     ports:
-      - "${TODOS_API_PORT}:8082"       # antes 8082:8082
+      - "8082:8082"
     depends_on:
       - redis
       - users-api
@@ -57,11 +57,10 @@ services:
       - PORT=8081
       - JWT_SECRET=${JWT_SECRET}
       - USERS_API_URL=http://users-api:8083
-    ports:
-      - "${AUTH_API_PORT}:8081"        # publicado para debug si lo necesitas
     depends_on:
       - users-api
     restart: unless-stopped
+    # OJO: sin healthcheck (la imagen distroless no tiene curl/wget/sh)
 
   log-message-processor:
     image: ${DOCKERHUB_USER}/log-message-processor:${TAG}

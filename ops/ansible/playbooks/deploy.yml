@@ -144,12 +144,6 @@
         dockerhub_user: "{{ lookup('env','DOCKERHUB_USER') }}"
         image_tag: "{{ lookup('env','IMAGE_TAG') | default('latest', true) }}"
         jwt_secret: "{{ jwt_secret_from_env }}"
-        frontend_port:    "{{ 8080 if 'staging' in group_names else 9080 }}"
-        users_api_port:   "{{ 8083 if 'staging' in group_names else 9083 }}"
-        todos_api_port:   "{{ 8082 if 'staging' in group_names else 9082 }}"
-        auth_api_port:    "{{ 8081 if 'staging' in group_names else 9081 }}"
-        nginx_http_port:  "{{ 8080 if 'staging' in group_names else 80 }}"
-        redis_port:       "{{ 6379 if 'staging' in group_names else 6479 }}"
 
     - name: Copy docker-compose file
       ansible.builtin.copy:
@@ -173,7 +167,6 @@
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
         files: ["{{ compose_file }}"]
-        project_name: "{{ 'microservice-app-stg' if 'staging' in group_names else 'microservice-app' }}"
         state: absent
       ignore_errors: true
 
@@ -181,8 +174,6 @@
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
         files: ["{{ compose_file }}"]
-        project_name: "{{ 'microservice-app-stg' if 'staging' in group_names else 'microservice-app' }}"
         pull: always
         state: present
         remove_orphans: true
-
