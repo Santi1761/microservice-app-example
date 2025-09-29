@@ -29,12 +29,18 @@ on:
       - 'todos-api/**'
       - 'log-message-processor/**'
 
+  workflow_run:
+    workflows: [ build-images ]
+    types: [ completed ]
+    branches: [ develop ]
+
 concurrency:
   group: deploy-staging-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   deploy:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: staging
 
@@ -44,16 +50,22 @@ jobs:
       - name: Resolve desired IMAGE_TAG
         id: tag
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            # viene de build-images; usa el mismo commit
+            SHA="${{ github.event.workflow_run.head_sha }}"
+            echo "IMAGE_TAG=dev-${SHA}" >> $GITHUB_ENV
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             if [ -n "${{ inputs.image_tag }}" ]; then
               echo "IMAGE_TAG=${{ inputs.image_tag }}" >> $GITHUB_ENV
             else
               echo "IMAGE_TAG=latest" >> $GITHUB_ENV
             fi
           else
+            # push a develop
             echo "IMAGE_TAG=dev-${GITHUB_SHA}" >> $GITHUB_ENV
           fi
-          echo "Using desired IMAGE_TAG=${IMAGE_TAG}"
+          echo "Using desired IMAGE_TAG=${IMAGE_TAG:-unknown}"
+
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -122,7 +134,6 @@ jobs:
 
       - name: Deploy with Ansible (staging)
         env:
-          # ✅ Evita el callback deprecated y muestra YAML con el plugin builtin
           ANSIBLE_STDOUT_CALLBACK: "default"
           ANSIBLE_CALLBACK_RESULT_FORMAT: "yaml"
           ANSIBLE_HOST_KEY_CHECKING: "False"
@@ -132,7 +143,6 @@ jobs:
           IMAGE_TAG: ${{ env.FINAL_TAG }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
 
-          # ✅ Clave: saltar bootstrap (APT/Docker) para que no se cuelgue
           SKIP_BOOTSTRAP: "true"
         run: |
           ansible-playbook -vv -i ops/ansible/inventory/hosts.ini ops/ansible/playbooks/deploy.yml -l staging

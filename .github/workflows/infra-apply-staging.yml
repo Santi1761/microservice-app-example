@@ -1,8 +1,7 @@
-name: infra-apply-staging
 on:
   push:
     branches: [ "infra/staging" ]
-    paths: [ "vm/**" ]
+    paths: [ "infra/terraform/vm/**" ]
   workflow_dispatch:
 
 jobs:
@@ -11,7 +10,7 @@ jobs:
     environment: staging
     defaults:
       run:
-        working-directory: vm
+        working-directory: infra/terraform/vm
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3

@@ -1,18 +1,17 @@
-name: infra-plan
 on:
   pull_request:
     branches: [ "infra/develop", "infra/staging", "infra/main" ]
-    paths: [ "vm/**" ]
+    paths: [ "infra/terraform/vm/**" ]
   push:
     branches: [ "infra/develop" ]
-    paths: [ "vm/**" ]
+    paths: [ "infra/terraform/vm/**" ]
 
 jobs:
   plan:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: vm
+        working-directory: infra/terraform/vm
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
