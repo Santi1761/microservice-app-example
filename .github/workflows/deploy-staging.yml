@@ -108,19 +108,17 @@ jobs:
           timeout 8 bash -lc 'echo > /dev/tcp/${{ secrets.SSH_HOST }}/22' \
             && echo "OK port 22" || (echo "Port 22 unreachable"; exit 1)
 
-      - name: Connectivity check (native ssh)
-        shell: bash
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-        run: |
-          set -euo pipefail
-          ssh -o StrictHostKeyChecking=no \
-              -o ConnectTimeout=10 \
-              -o ServerAliveInterval=10 \
-              -o ServerAliveCountMax=3 \
-              "${SSH_USER}@${SSH_HOST}" 'echo ok'
-
+      - name: Connectivity check (appleboy)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          timeout: 60s
+          command_timeout: 10s
+          script_stop: true
+          script: echo ok
 
       - name: Deploy with Ansible (staging)
         env:
